@@ -1,7 +1,10 @@
 name: Build Akoya Home APK
 on:
   push:
+    branches: [main]
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -13,7 +16,20 @@ jobs:
           java-version: 17
       - uses: gradle/actions/setup-gradle@v4
       - run: chmod +x gradlew && ./gradlew assembleRelease --stacktrace
+      - run: cp app/build/outputs/apk/release/app-release.apk akoya-home.apk
       - uses: actions/upload-artifact@v4
         with:
           name: akoya-home-apk
-          path: app/build/outputs/apk/release/*.apk
+          path: akoya-home.apk
+      - name: Publish as "latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest akoya-home.apk --title "Akoya Home (latest build)" --notes "Built from ${GITHUB_SHA::7}" --latest
+      - name: Store APK on the apk branch
+        run: |
+          mkdir /tmp/apk && cp akoya-home.apk /tmp/apk/ && cd /tmp/apk
+          git init -q -b apk && git add akoya-home.apk
+          git -c user.name=ci -c user.email=ci@users.noreply.github.com commit -qm "APK ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" apk
