@@ -1,10 +1,23 @@
 package com.akoya.home.ui.components
 
 import android.view.KeyEvent as NativeKeyEvent
-import androidx.compose.animation.core.Spring
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
-import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -36,13 +49,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -131,7 +142,7 @@ fun TvCard(
     onLongClick: (() -> Unit)? = null,
     onFocus: ((Boolean) -> Unit)? = null,
     focusRequester: FocusRequester? = null,
-    shape: Shape = RoundedCornerShape(14.dp),
+    corner: Dp = 14.dp,
     background: Color? = null,
     content: @Composable BoxScope.(focused: Boolean) -> Unit,
 ) {
@@ -140,23 +151,40 @@ fun TvCard(
     var focused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(
         targetValue = if (focused) config.focusZoom else 1f,
-        animationSpec = if (config.animations) spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessMediumLow) else snap(),
+        animationSpec = if (config.animations) tween(260, easing = Emphasized) else snap(),
         label = "cardScale",
     )
+    val ring by animateFloatAsState(
+        targetValue = if (focused) 1f else 0f,
+        animationSpec = if (config.animations) tween(200) else snap(),
+        label = "cardRing",
+    )
+    val shape = RoundedCornerShape(corner)
     Box(
         modifier
             .width(width)
             .height(height)
             .zIndex(if (focused) 1f else 0f)
             .graphicsLayer { scaleX = scale; scaleY = scale }
-            .shadow(if (focused) 20.dp else 0.dp, shape, ambientColor = palette.accent, spotColor = palette.accent)
+            // Focus ring drawn just outside the card, following its rounded shape.
+            .drawWithContent {
+                drawContent()
+                if (ring > 0f) {
+                    val gap = 3.dp.toPx()
+                    val stroke = 2.5.dp.toPx()
+                    val inset = gap + stroke / 2f
+                    drawRoundRect(
+                        color = palette.accent.copy(alpha = ring),
+                        topLeft = Offset(-inset, -inset),
+                        size = Size(size.width + inset * 2, size.height + inset * 2),
+                        cornerRadius = CornerRadius(corner.toPx() + inset),
+                        style = Stroke(stroke),
+                    )
+                }
+            }
             .clip(shape)
             .background(background ?: palette.surface)
-            .border(
-                width = if (focused) 3.dp else 1.dp,
-                color = if (focused) palette.accent else palette.text.copy(alpha = 0.08f),
-                shape = shape,
-            )
+            .border(1.dp, palette.text.copy(alpha = 0.06f), shape)
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .tvClickable(onClick, onLongClick) { focused = it; onFocus?.invoke(it) },
     ) { content(focused) }
@@ -175,12 +203,16 @@ fun TvButton(
 ) {
     val palette = LocalPalette.current
     var focused by remember { mutableStateOf(false) }
-    val bg = when {
-        focused -> palette.accent
-        selected -> palette.text.copy(alpha = 0.16f)
-        else -> Color.Transparent
-    }
-    val fg = if (focused) palette.accent.readableOn() else palette.text
+    val bg by animateColorAsState(
+        when {
+            focused -> palette.text
+            selected -> palette.text.copy(alpha = 0.12f)
+            else -> palette.text.copy(alpha = 0f)
+        },
+        animationSpec = tween(180),
+        label = "btnBg",
+    )
+    val fg by animateColorAsState(if (focused) palette.background else palette.text, tween(180), label = "btnFg")
     Row(
         modifier
             .clip(RoundedCornerShape(50))
@@ -193,6 +225,30 @@ fun TvButton(
     ) {
         if (icon != null) Icon(icon, contentDescription = text.ifEmpty { null }, tint = fg, modifier = Modifier.size(22.dp))
         if (text.isNotEmpty()) Text(text, style = AkoyaType.label, color = fg, maxLines = 1)
+    }
+}
+
+val ROW_PADDING = PaddingValues(start = 56.dp, end = 56.dp, top = 14.dp, bottom = 14.dp)
+
+/**
+ * A horizontal row that remembers which tile had focus, so moving up/down and back
+ * returns to the same tile, and scrolls smoothly only near the edges.
+ */
+@OptIn(ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
+@Composable
+fun TvLazyRow(
+    modifier: Modifier = Modifier,
+    contentPadding: PaddingValues = ROW_PADDING,
+    spacing: Dp = 22.dp,
+    content: LazyListScope.() -> Unit,
+) {
+    CompositionLocalProvider(LocalBringIntoViewSpec provides RowScrollSpec) {
+        LazyRow(
+            modifier = modifier.focusRestorer(),
+            contentPadding = contentPadding,
+            horizontalArrangement = Arrangement.spacedBy(spacing),
+            content = content,
+        )
     }
 }
 

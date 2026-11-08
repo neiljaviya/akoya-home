@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -37,7 +36,8 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.dp
 import com.akoya.home.ui.components.TvCard
 import com.akoya.home.ui.components.drawThemeGradient
-import com.akoya.home.ui.components.drawZenPattern
+import com.akoya.home.ui.components.drawMist
+import com.akoya.home.ui.components.TvLazyRow
 import com.akoya.home.ui.components.tvClickable
 import com.akoya.home.ui.theme.AkoyaPalette
 import com.akoya.home.ui.theme.AkoyaType
@@ -132,10 +132,7 @@ fun SettingsNote(text: String) {
 
 @Composable
 fun ThemePicker(selectedId: String, onPick: (AkoyaPalette) -> Unit) {
-    LazyRow(
-        contentPadding = PaddingValues(vertical = 14.dp, horizontal = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(18.dp),
-    ) {
+    TvLazyRow(contentPadding = PaddingValues(vertical = 14.dp, horizontal = 8.dp), spacing = 18.dp) {
         items(Palettes, key = { it.id }) { pal ->
             TvCard(width = 168.dp, height = 100.dp, onClick = { onPick(pal) }) {
                 Box(
@@ -143,7 +140,7 @@ fun ThemePicker(selectedId: String, onPick: (AkoyaPalette) -> Unit) {
                         .fillMaxSize()
                         .drawBehind {
                             drawThemeGradient(pal)
-                            drawZenPattern(pal, 0f)
+                            drawMist(pal, 0f)
                         },
                 )
                 Text(

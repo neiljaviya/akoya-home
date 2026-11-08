@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.Text
@@ -30,7 +29,11 @@ import com.akoya.home.ui.components.ContentCard
 import com.akoya.home.ui.components.SectionHeader
 import com.akoya.home.ui.components.TvCard
 import com.akoya.home.ui.home.CONTENT_WIDTH
-import com.akoya.home.ui.home.ROW_PADDING
+import com.akoya.home.ui.components.TvLazyRow
+import com.akoya.home.ui.components.HomeScrollSpec
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
+import androidx.compose.runtime.CompositionLocalProvider
 import com.akoya.home.ui.theme.AkoyaType
 import com.akoya.home.ui.theme.LocalPalette
 
@@ -55,6 +58,7 @@ private val CATEGORIES = listOf(
     Category("News", "news tv"),
 )
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ShopScreen(controller: LauncherController, apps: List<AppInfo>) {
     val p = LocalPalette.current
@@ -63,7 +67,8 @@ fun ShopScreen(controller: LauncherController, apps: List<AppInfo>) {
         value = controller.content.appPrograms("com.google.android.videos")
     }
 
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 120.dp)) {
+    CompositionLocalProvider(LocalBringIntoViewSpec provides HomeScrollSpec) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 200.dp)) {
         item {
             Column(Modifier.padding(start = 56.dp, top = 24.dp, bottom = 8.dp)) {
                 Text("Get more apps & games", style = AkoyaType.title, color = p.text)
@@ -73,7 +78,7 @@ fun ShopScreen(controller: LauncherController, apps: List<AppInfo>) {
         item {
             Column {
             SectionHeader("Stores")
-            LazyRow(contentPadding = ROW_PADDING, horizontalArrangement = Arrangement.spacedBy(22.dp)) {
+            TvLazyRow() {
                 items(stores, key = { it.packageName }) { app ->
                     AppTile(
                         app = app,
@@ -88,7 +93,7 @@ fun ShopScreen(controller: LauncherController, apps: List<AppInfo>) {
         item {
             Column {
             SectionHeader("Browse the Play Store")
-            LazyRow(contentPadding = ROW_PADDING, horizontalArrangement = Arrangement.spacedBy(22.dp)) {
+            TvLazyRow() {
                 itemsIndexed(CATEGORIES, key = { _, c -> c.label }) { i, cat ->
                     TvCard(
                         width = 190.dp,
@@ -129,7 +134,7 @@ fun ShopScreen(controller: LauncherController, apps: List<AppInfo>) {
             item {
             Column {
                 SectionHeader("Picks from Google TV")
-                LazyRow(contentPadding = ROW_PADDING, horizontalArrangement = Arrangement.spacedBy(22.dp)) {
+                TvLazyRow() {
                     itemsIndexed(pickItems, key = { i, c -> "p$i-${c.id}" }) { _, item ->
                         ContentCard(
                             item = item,
@@ -142,4 +147,5 @@ fun ShopScreen(controller: LauncherController, apps: List<AppInfo>) {
         }
         }
     }
+}
 }

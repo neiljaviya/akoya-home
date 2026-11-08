@@ -13,7 +13,18 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
+import androidx.compose.runtime.CompositionLocalProvider
+import com.akoya.home.ui.components.Emphasized
+import com.akoya.home.ui.components.HomeScrollSpec
+import com.akoya.home.ui.components.TvLazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
@@ -72,22 +83,20 @@ import kotlinx.coroutines.delay
 
 val APP_TILE_WIDTH = 176.dp
 val CONTENT_WIDTH = 248.dp
-val ROW_PADDING = PaddingValues(start = 56.dp, end = 56.dp, top = 14.dp, bottom = 14.dp)
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun HomeScreen(controller: LauncherController, config: LauncherConfig, apps: List<AppInfo>) {
     val sections = config.sections.filter { it.visible }
+    // A clock section at the very top sits above the list and folds away as you scroll down.
+    val heroOnTop = sections.firstOrNull()?.type == SectionType.HERO
+    val listSections = if (heroOnTop) sections.drop(1) else sections
     val listState = rememberLazyListState()
     var focusedIndex by remember { mutableIntStateOf(-1) }
-    val firstInteractive = sections.indexOfFirst { it.type != SectionType.HERO }
+    val firstInteractive = listSections.indexOfFirst { it.type != SectionType.HERO }
     val firstCard = remember { FocusRequester() }
+    val heroVisible = focusedIndex <= firstInteractive.coerceAtLeast(0)
 
-    // Row-by-row scrolling like the stock launcher: the focused row snaps to the top.
-    LaunchedEffect(focusedIndex) {
-        if (focusedIndex >= 0) {
-            listState.animateScrollToItem(if (focusedIndex <= firstInteractive) 0 else focusedIndex)
-        }
-    }
     LaunchedEffect(controller.homeReset, apps.isNotEmpty()) {
         if (apps.isNotEmpty() && controller.handledHomeReset != controller.homeReset) {
             controller.handledHomeReset = controller.homeReset
@@ -97,20 +106,33 @@ fun HomeScreen(controller: LauncherController, config: LauncherConfig, apps: Lis
         }
     }
 
-    LazyColumn(
-        state = listState,
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = 120.dp),
-    ) {
-        itemsIndexed(sections, key = { _, s -> s.id }) { index, section ->
-            Box(Modifier.onFocusChanged { if (it.hasFocus) focusedIndex = index }) {
-                SectionView(
-                    controller = controller,
-                    config = config,
-                    apps = apps,
-                    section = section,
-                    initialFocus = if (index == firstInteractive) firstCard else null,
-                )
+    Column(Modifier.fillMaxSize()) {
+        if (heroOnTop) {
+            AnimatedVisibility(
+                visible = heroVisible,
+                enter = expandVertically(tween(480, easing = Emphasized)) + fadeIn(tween(480)),
+                exit = shrinkVertically(tween(480, easing = Emphasized)) + fadeOut(tween(260)),
+            ) { HeroSection(config) }
+        }
+        CompositionLocalProvider(LocalBringIntoViewSpec provides HomeScrollSpec) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .onFocusChanged { if (!it.hasFocus) focusedIndex = -1 },
+                contentPadding = PaddingValues(bottom = 200.dp),
+            ) {
+                itemsIndexed(listSections, key = { _, s -> s.id }) { index, section ->
+                    Box(Modifier.onFocusChanged { if (it.hasFocus) focusedIndex = index }) {
+                        SectionView(
+                            controller = controller,
+                            config = config,
+                            apps = apps,
+                            section = section,
+                            initialFocus = if (index == firstInteractive) firstCard else null,
+                        )
+                    }
+                }
             }
         }
     }
@@ -209,7 +231,7 @@ private fun QuickAppsSection(
     val width = APP_TILE_WIDTH * section.size.scale
     Column {
         SectionHeader(section.title)
-        LazyRow(contentPadding = ROW_PADDING, horizontalArrangement = Arrangement.spacedBy(22.dp)) {
+        TvLazyRow() {
             itemsIndexed(favorites, key = { _, a -> a.packageName }) { i, app ->
                 AppTile(
                     app = app,
@@ -256,7 +278,7 @@ private fun AppRow(
 ) {
     Column {
         SectionHeader(title)
-        LazyRow(contentPadding = ROW_PADDING, horizontalArrangement = Arrangement.spacedBy(22.dp)) {
+        TvLazyRow() {
             itemsIndexed(apps, key = { _, a -> a.packageName }) { i, app ->
                 AppTile(
                     app = app,
@@ -285,7 +307,7 @@ private fun ContentSection(
     if (app == null && result != null && items.isEmpty() && !result.needsPermission) return
     Column {
         SectionHeader(title)
-        LazyRow(contentPadding = ROW_PADDING, horizontalArrangement = Arrangement.spacedBy(22.dp)) {
+        TvLazyRow() {
             if (app != null) {
                 item(key = "__app") {
                     // Large artwork tile that opens the app itself.
@@ -329,7 +351,7 @@ private fun ContentSection(
 private fun AppMissingRow(controller: LauncherController, title: String, pkg: String, initialFocus: FocusRequester?) {
     Column {
         SectionHeader(title)
-        LazyRow(contentPadding = ROW_PADDING) {
+        TvLazyRow() {
             item {
                 HintCard(
                     width = CONTENT_WIDTH * 1.4f,
@@ -369,7 +391,7 @@ private fun InputsRow(
     val p = LocalPalette.current
     Column {
         SectionHeader(title)
-        LazyRow(contentPadding = ROW_PADDING, horizontalArrangement = Arrangement.spacedBy(22.dp)) {
+        TvLazyRow() {
             itemsIndexed(inputs, key = { _, s -> s.id }) { i, src ->
                 TvCard(
                     width = 170.dp * scale,
@@ -412,7 +434,7 @@ private fun ShortcutsRow(controller: LauncherController, title: String, scale: F
     }
     Column {
         SectionHeader(title)
-        LazyRow(contentPadding = ROW_PADDING, horizontalArrangement = Arrangement.spacedBy(22.dp)) {
+        TvLazyRow() {
             itemsIndexed(shortcuts, key = { _, s -> s.label }) { i, s ->
                 TvCard(
                     width = 170.dp * scale,

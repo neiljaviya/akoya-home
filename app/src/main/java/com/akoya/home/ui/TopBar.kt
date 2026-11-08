@@ -28,6 +28,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.akoya.home.data.LauncherConfig
@@ -65,6 +68,7 @@ fun rememberNetState(): NetState {
     return state
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun TopBar(controller: LauncherController, config: LauncherConfig, navFocus: Map<Tab, FocusRequester>) {
     val p = LocalPalette.current
@@ -79,6 +83,15 @@ fun TopBar(controller: LauncherController, config: LauncherConfig, navFocus: Map
     ) {
         BrandMark(controller.store)
         Spacer(Modifier.width(28.dp))
+        // Remembers the last pill, so pressing Up from the content returns to the current tab
+        // instead of whichever pill happens to be nearest.
+        Row(
+            Modifier
+                .focusRestorer { navFocus[controller.tab] ?: FocusRequester.Default }
+                .focusGroup(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
         TvButton(text = "Search", icon = Icons.Filled.Search, onClick = { controller.openSearch() })
         for (tab in listOf(Tab.HOME, Tab.APPS, Tab.SHOP)) {
             TvButton(
@@ -92,6 +105,15 @@ fun TopBar(controller: LauncherController, config: LauncherConfig, navFocus: Map
                 },
             )
         }
+        Spacer(Modifier.width(10.dp))
+        TvButton(
+            text = "",
+            icon = Icons.Filled.Settings,
+            selected = controller.tab == Tab.SETTINGS,
+            focusRequester = navFocus[Tab.SETTINGS],
+            onClick = { controller.tab = Tab.SETTINGS },
+        )
+        }
         Spacer(Modifier.weight(1f))
         Icon(
             imageVector = when (net) {
@@ -102,14 +124,6 @@ fun TopBar(controller: LauncherController, config: LauncherConfig, navFocus: Map
             contentDescription = "Network",
             tint = if (net == NetState.NONE) p.muted else p.text,
             modifier = Modifier.size(24.dp),
-        )
-        Spacer(Modifier.width(6.dp))
-        TvButton(
-            text = "",
-            icon = Icons.Filled.Settings,
-            selected = controller.tab == Tab.SETTINGS,
-            focusRequester = navFocus[Tab.SETTINGS],
-            onClick = { controller.tab = Tab.SETTINGS },
         )
         Spacer(Modifier.width(14.dp))
         Text(formatTime(now, config.use24h, false), style = AkoyaType.title, color = p.text)

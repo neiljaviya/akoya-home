@@ -116,7 +116,13 @@ class LauncherController(val context: Context) {
     fun openBluetooth() = apps.startFirst(Intent(Settings.ACTION_BLUETOOTH_SETTINGS), Intent(Settings.ACTION_SETTINGS))
     fun openDisplay() = apps.startFirst(Intent(Settings.ACTION_DISPLAY_SETTINGS), Intent(Settings.ACTION_SETTINGS))
     fun openDreamSettings() = apps.startFirst(Intent(Settings.ACTION_DREAM_SETTINGS), Intent(Settings.ACTION_DISPLAY_SETTINGS))
-    fun openAccessibility() = apps.startFirst(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS), Intent(Settings.ACTION_SETTINGS))
+    /** Google TV builds differ; try the TV Settings accessibility screen directly first. */
+    fun openAccessibility() = apps.startFirst(
+        Intent().setClassName("com.android.tv.settings", "com.android.tv.settings.accessibility.AccessibilityActivity"),
+        Intent().setClassName("com.android.tv.settings", "com.android.tv.settings.system.AccessibilityActivity"),
+        Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS),
+        Intent(Settings.ACTION_SETTINGS),
+    )
     fun openHomeSettings() = apps.startFirst(Intent(Settings.ACTION_HOME_SETTINGS), Intent(Settings.ACTION_SETTINGS))
 
     fun toast(msg: String) = Toast.makeText(context, msg, Toast.LENGTH_LONG).show()

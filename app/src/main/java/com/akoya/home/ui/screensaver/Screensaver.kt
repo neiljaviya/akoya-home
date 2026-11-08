@@ -39,7 +39,7 @@ import com.akoya.home.data.ConfigStore
 import com.akoya.home.data.LauncherConfig
 import com.akoya.home.data.ScreensaverStyle
 import com.akoya.home.ui.components.drawThemeGradient
-import com.akoya.home.ui.components.drawZenPattern
+import com.akoya.home.ui.components.drawMist
 import com.akoya.home.ui.components.formatAmPm
 import com.akoya.home.ui.components.formatDate
 import com.akoya.home.ui.components.formatTime
@@ -117,19 +117,10 @@ private fun Slideshow(photos: List<Any>, seconds: Int) {
 private fun AmbientPearl() {
     val p = LocalPalette.current
     val t = rememberInfiniteTransition(label = "ambient")
-    val phase by t.animateFloat(0f, 1f, infiniteRepeatable(tween(60_000, easing = LinearEasing)), label = "phase")
-    val breathe by t.animateFloat(0f, 1f, infiniteRepeatable(tween(9_000), RepeatMode.Reverse), label = "breathe")
+    val phase by t.animateFloat(0f, 1f, infiniteRepeatable(tween(90_000, easing = LinearEasing)), label = "phase")
     Canvas(Modifier.fillMaxSize()) {
-        drawThemeGradient(p)
-        drawZenPattern(p, breathe)
-        val a = phase * 2f * Math.PI.toFloat()
-        val c = Offset(size.width * (0.5f + 0.28f * cos(a)), size.height * (0.5f + 0.22f * sin(a * 2)))
-        drawCircle(
-            Brush.radialGradient(listOf(p.accent.copy(alpha = 0.16f), Color.Transparent), center = c, radius = size.minDimension * 0.6f),
-            radius = size.minDimension * 0.6f,
-            center = c,
-        )
-        drawRect(Color.Black.copy(alpha = 0.25f))
+        drawRect(p.background)
+        drawMist(p, phase)
     }
 }
 
@@ -146,7 +137,7 @@ private fun CenterClock(config: LauncherConfig) {
             }
             Text(formatDate(now), style = AkoyaType.title, color = p.muted)
         }
-        Text("A K O Y A", style = AkoyaType.wordmark, color = p.accent.copy(alpha = 0.7f), modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 40.dp))
+        Text(config.brandName.uppercase(), style = AkoyaType.section, color = p.accent.copy(alpha = 0.8f), modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 40.dp))
     }
 }
 

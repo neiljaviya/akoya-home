@@ -1,5 +1,12 @@
 package com.akoya.home.ui.settings
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.focus.focusRestorer
+import com.akoya.home.ui.components.ListScrollSpec
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -57,6 +64,7 @@ private enum class SettingsTab(val label: String) {
 
 private const val PKG = "com.akoya.home"
 
+@OptIn(ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
 @Composable
 fun SettingsScreen(controller: LauncherController, config: LauncherConfig, apps: List<AppInfo>) {
     val p = LocalPalette.current
@@ -70,10 +78,14 @@ fun SettingsScreen(controller: LauncherController, config: LauncherConfig, apps:
     var addingAppSection by remember { mutableStateOf(false) }
     var editingName by remember { mutableStateOf(false) }
     var confirmReset by remember { mutableStateOf(false) }
+    var editingBrand by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize()) {
         Row(
-            Modifier.padding(start = 56.dp, end = 56.dp, top = 16.dp, bottom = 4.dp),
+            Modifier
+                .padding(start = 56.dp, end = 56.dp, top = 16.dp, bottom = 4.dp)
+                .focusRestorer()
+                .focusGroup(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
@@ -89,13 +101,14 @@ fun SettingsScreen(controller: LauncherController, config: LauncherConfig, apps:
                 )
             }
         }
+        CompositionLocalProvider(LocalBringIntoViewSpec provides ListScrollSpec) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 56.dp, end = 56.dp, top = 12.dp, bottom = 140.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             when (tab) {
-                SettingsTab.APPEARANCE -> appearance(controller, config)
+                SettingsTab.APPEARANCE -> appearance(controller, config, onEditBrand = { editingBrand = true })
                 SettingsTab.LAYOUT -> layout(
                     controller, config,
                     onEdit = { editingId = it },
@@ -106,6 +119,7 @@ fun SettingsScreen(controller: LauncherController, config: LauncherConfig, apps:
                 SettingsTab.APPS -> appsTab(controller, config, apps)
                 SettingsTab.SETUP -> setup(controller, onReset = { confirmReset = true })
             }
+        }
         }
     }
 
@@ -215,6 +229,15 @@ fun SettingsScreen(controller: LauncherController, config: LauncherConfig, apps:
         )
     }
 
+    if (editingBrand) {
+        TextInputDialog(
+            title = "Name shown on screen",
+            initial = config.brandName,
+            onDone = { name -> store.update { it.copy(brandName = name.ifBlank { "Javiya's TV" }) } },
+            onDismiss = { editingBrand = false },
+        )
+    }
+
     if (confirmReset) {
         OptionsDialog(
             title = "Reset Akoya Home?",
@@ -234,9 +257,10 @@ fun SettingsScreen(controller: LauncherController, config: LauncherConfig, apps:
 // ------------------------------------------------------------------------------------------
 // Tabs
 
-private fun LazyListScope.appearance(controller: LauncherController, config: LauncherConfig) {
+private fun LazyListScope.appearance(controller: LauncherController, config: LauncherConfig, onEditBrand: () -> Unit) {
     val store = controller.store
-    item { SettingsNote("Theme") }
+    item { SettingRow(title = "Name shown on screen", value = config.brandName, subtitle = "Top-left of Home and on the screensaver", onClick = onEditBrand) }
+    item { SettingsNote("Theme (from the Akoya signage)") }
     item { ThemePicker(config.themeId) { pal -> store.update { it.copy(themeId = pal.id) } } }
     item {
         ChoiceRow(
@@ -288,8 +312,8 @@ private fun LazyListScope.appearance(controller: LauncherController, config: Lau
     item {
         SettingRow(
             title = "Logo",
-            value = if (store.logoFile() != null) "Custom logo" else "AKOYA wordmark",
-            subtitle = "To use your own: adb push logo.png ${store.brandingDir.absolutePath}/logo.png",
+            value = if (store.logoFile() != null) "Custom logo" else "Name as text",
+            subtitle = "Optional image logo instead of the name: adb push logo.png ${store.brandingDir.absolutePath}/logo.png",
         )
     }
 }
@@ -430,7 +454,7 @@ private fun LazyListScope.setup(controller: LauncherController, onReset: () -> U
             title = "Home button takeover (no computer needed)",
             value = if (on) "On" else "Off",
             subtitle = if (on) "Pressing Home always lands on Akoya." else
-                "Select, then turn on Accessibility → \"Akoya Home – Home button\"",
+                "TV Settings → System → Accessibility → scroll to \"Akoya Home – Home button\" → On",
             onClick = { controller.openAccessibility() },
         )
     }

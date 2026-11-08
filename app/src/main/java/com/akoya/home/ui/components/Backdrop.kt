@@ -15,7 +15,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
@@ -62,7 +61,7 @@ fun Backdrop(config: LauncherConfig, store: ConfigStore, modifier: Modifier = Mo
                     .fillMaxSize()
                     .drawBehind {
                         drawThemeGradient(p)
-                        if (config.wallpaperMode != WallpaperMode.THEME) drawZenPattern(p, breathe = 0f)
+                        if (config.wallpaperMode != WallpaperMode.THEME) drawMist(p, 0f)
                     },
             )
         }
@@ -71,53 +70,35 @@ fun Backdrop(config: LauncherConfig, store: ConfigStore, modifier: Modifier = Mo
 
 fun DrawScope.drawThemeGradient(p: AkoyaPalette) {
     drawRect(Brush.verticalGradient(listOf(p.backgroundAlt, p.background, p.background)))
-    drawRect(
-        Brush.radialGradient(
-            colors = listOf(p.accent.copy(alpha = if (p.isLight) 0.22f else 0.14f), Color.Transparent),
-            center = Offset(size.width * 0.86f, size.height * 0.08f),
-            radius = size.width * 0.55f,
-        ),
-    )
 }
 
-/** Enso-like concentric rings around a "pearl", plus faint shoji lines. breathe in 0..1. */
-fun DrawScope.drawZenPattern(p: AkoyaPalette, breathe: Float) {
-    val center = Offset(size.width * 0.80f, size.height * 0.30f)
-    val base = size.minDimension * 0.16f * (1f + breathe * 0.04f)
-    for (i in 0 until 7) {
-        val r = base + i * size.minDimension * 0.075f
-        drawCircle(
-            color = p.accent.copy(alpha = (0.16f - i * 0.02f).coerceAtLeast(0.025f)),
-            radius = r,
-            center = center,
-            style = Stroke(width = if (i == 0) 2.5f else 1.2f),
-        )
-    }
-    drawCircle(
-        brush = Brush.radialGradient(
-            listOf(p.text.copy(alpha = 0.30f), p.accent.copy(alpha = 0.10f), Color.Transparent),
-            center = center,
-            radius = base * 0.9f,
-        ),
-        radius = base * 0.9f,
-        center = center,
+/**
+ * The signage "mist": large soft glows that drift slowly. t in 0..1 is the drift phase
+ * (0 = resting position used on the home screen).
+ */
+fun DrawScope.drawMist(p: AkoyaPalette, t: Float) {
+    val a = t * 2f * Math.PI.toFloat()
+    val w = size.width
+    val h = size.height
+    fun glow(color: Color, cx: Float, cy: Float, r: Float) = drawCircle(
+        brush = Brush.radialGradient(listOf(color, color.copy(alpha = color.alpha * 0.45f), Color.Transparent), center = Offset(cx, cy), radius = r),
+        radius = r,
+        center = Offset(cx, cy),
     )
-    val lineGap = size.height * 0.035f
-    var y = size.height * 0.74f
-    while (y < size.height) {
-        drawLine(p.text.copy(alpha = 0.035f), Offset(0f, y), Offset(size.width, y), strokeWidth = 1f)
-        y += lineGap
-    }
+    glow(p.mist[0], w * (0.84f + 0.05f * kotlin.math.sin(a)), h * (0.10f + 0.08f * kotlin.math.cos(a)), w * 0.55f)
+    glow(p.mist[1 % p.mist.size], w * (0.08f + 0.06f * kotlin.math.cos(a * 0.7f)), h * (0.98f - 0.06f * kotlin.math.sin(a)), w * 0.45f)
+    glow(p.mist[2 % p.mist.size], w * (0.48f + 0.10f * kotlin.math.sin(a * 0.5f)), h * (0.55f + 0.08f * kotlin.math.cos(a * 1.3f)), w * 0.32f)
 }
 
 @Composable
 fun BrandMark(store: ConfigStore, modifier: Modifier = Modifier) {
     val p = LocalPalette.current
     val logo = remember { store.logoFile() }
+    val name = com.akoya.home.ui.theme.LocalConfig.current.brandName
     if (logo != null) {
         AsyncImage(model = logo, contentDescription = "Logo", modifier = modifier.height(40.dp))
     } else {
-        Text("AKOYA", style = AkoyaType.wordmark, color = p.accent, modifier = modifier)
+        Text(name, style = AkoyaType.wordmark, color = p.text, modifier = modifier)
     }
 }
 

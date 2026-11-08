@@ -28,14 +28,14 @@ enum class CardSize(val label: String, val scale: Float) {
 }
 
 enum class ScreensaverStyle(val label: String) {
-    AMBIENT("Ambient pearl"),
+    AMBIENT("Drifting mist"),
     CLOCK("Floating clock"),
     PHOTOS("Photo slideshow"),
 }
 
 enum class WallpaperMode(val label: String) {
-    PATTERN("Zen pattern"),
-    THEME("Theme gradient"),
+    PATTERN("Signage mist"),
+    THEME("Plain"),
     IMAGE("Custom image"),
     SOLID("Solid colour"),
 }
@@ -97,7 +97,8 @@ data class ScreensaverConfig(
 }
 
 data class LauncherConfig(
-    val themeId: String = "midnight_pearl",
+    val themeId: String = "obsidian",
+    val brandName: String = "Javiya's TV",
     val wallpaperMode: WallpaperMode = WallpaperMode.PATTERN,
     val wallpaperFile: String? = null,
     val wallpaperDim: Float = 0.45f,
@@ -118,6 +119,7 @@ data class LauncherConfig(
     fun toJson(): JSONObject = JSONObject()
         .put("version", 1)
         .put("themeId", themeId)
+        .put("brandName", brandName)
         .put("wallpaperMode", wallpaperMode.name)
         .put("wallpaperFile", wallpaperFile ?: JSONObject.NULL)
         .put("wallpaperDim", wallpaperDim.toDouble())
@@ -143,6 +145,7 @@ data class LauncherConfig(
             }
             return LauncherConfig(
                 themeId = o.optString("themeId", d.themeId).ifBlank { d.themeId },
+                brandName = o.optString("brandName", d.brandName),
                 wallpaperMode = enumOrNull<WallpaperMode>(o.optString("wallpaperMode")) ?: d.wallpaperMode,
                 wallpaperFile = if (o.isNull("wallpaperFile")) null else o.optString("wallpaperFile").ifBlank { null },
                 wallpaperDim = o.optDouble("wallpaperDim", d.wallpaperDim.toDouble()).toFloat(),

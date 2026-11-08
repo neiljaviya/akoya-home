@@ -8,14 +8,16 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+import com.akoya.home.R
 import com.akoya.home.data.LauncherConfig
 
 /**
- * Akoya palettes. Akoya Living's identity is zen / Japanese-inspired and named after the
- * Akoya pearl, so the presets lean on pearl, ink, stone, sage and lotus tones.
+ * Palettes from the Akoya lobby signage: Obsidian, Kumo White and Sandstone, plus two
+ * pearl ("nacre") variants. `mist` are the soft drifting glows used behind each scene.
  */
 data class AkoyaPalette(
     val id: String,
@@ -26,45 +28,55 @@ data class AkoyaPalette(
     val accent: Color,
     val text: Color,
     val muted: Color,
+    val mist: List<Color>,
     val isLight: Boolean = false,
 )
 
+private val Obsidian = Color(0xFF141311)
+private val Kumo = Color(0xFFF1EEE8)
+private val Sandstone = Color(0xFFC8B79D)
+private val SandstoneDeep = Color(0xFF8C795E)
+private val InkSoft = Color(0xFF5A544A)
+private val Ash = Color(0xFFA39D91)
+
 val Palettes = listOf(
     AkoyaPalette(
-        id = "midnight_pearl", name = "Midnight Pearl",
-        background = Color(0xFF0E1116), backgroundAlt = Color(0xFF1C2431),
-        surface = Color(0x1FFFFFFF), accent = Color(0xFFD6C4A5),
-        text = Color(0xFFF3EEE6), muted = Color(0xFFA9A39A),
+        id = "obsidian", name = "Obsidian",
+        background = Obsidian, backgroundAlt = Color(0xFF211F1B),
+        surface = Color(0x14F1EEE8), accent = Sandstone,
+        text = Kumo, muted = Ash,
+        mist = listOf(Sandstone.copy(alpha = 0.17f), Sandstone.copy(alpha = 0.09f), Kumo.copy(alpha = 0.04f)),
     ),
     AkoyaPalette(
-        id = "pearl", name = "Pearl",
-        background = Color(0xFFF3EEE6), backgroundAlt = Color(0xFFE2D8C8),
-        surface = Color(0x14000000), accent = Color(0xFF8C6F4E),
-        text = Color(0xFF1E1B18), muted = Color(0xFF6E665C), isLight = true,
+        id = "kumo", name = "Kumo White",
+        background = Kumo, backgroundAlt = Color(0xFFE7E1D7),
+        surface = Color(0x0F141311), accent = SandstoneDeep,
+        text = Obsidian, muted = InkSoft,
+        mist = listOf(Sandstone.copy(alpha = 0.50f), Sandstone.copy(alpha = 0.30f), Color.White.copy(alpha = 0.5f)),
+        isLight = true,
     ),
     AkoyaPalette(
-        id = "sumi_gold", name = "Sumi & Gold",
-        background = Color(0xFF090909), backgroundAlt = Color(0xFF1C1814),
-        surface = Color(0x1AFFFFFF), accent = Color(0xFFC9A14A),
-        text = Color(0xFFF5F1E8), muted = Color(0xFF9E978A),
+        id = "sandstone", name = "Sandstone",
+        background = Sandstone, backgroundAlt = Color(0xFFBBA98C),
+        surface = Color(0x1A141311), accent = Obsidian,
+        text = Obsidian, muted = Color(0xFF3D382F),
+        mist = listOf(Kumo.copy(alpha = 0.40f), Kumo.copy(alpha = 0.22f), SandstoneDeep.copy(alpha = 0.18f)),
+        isLight = true,
     ),
     AkoyaPalette(
-        id = "zen_garden", name = "Zen Garden",
-        background = Color(0xFF121713), backgroundAlt = Color(0xFF263024),
-        surface = Color(0x1FFFFFFF), accent = Color(0xFFAFC29F),
-        text = Color(0xFFEEF1E8), muted = Color(0xFF9DA596),
+        id = "nacre", name = "Nacre",
+        background = Color(0xFFEFEAE4), backgroundAlt = Color(0xFFE6E0E4),
+        surface = Color(0x0F141311), accent = SandstoneDeep,
+        text = Obsidian, muted = InkSoft,
+        mist = listOf(Color(0xFFE6CFD4).copy(alpha = 0.75f), Color(0xFFCFDDE6).copy(alpha = 0.70f), Color(0xFFE9E0C9).copy(alpha = 0.60f)),
+        isLight = true,
     ),
     AkoyaPalette(
-        id = "lotus", name = "Lotus",
-        background = Color(0xFF1A1216), backgroundAlt = Color(0xFF38242E),
-        surface = Color(0x1FFFFFFF), accent = Color(0xFFE6B8C2),
-        text = Color(0xFFF8EEF0), muted = Color(0xFFB09CA2),
-    ),
-    AkoyaPalette(
-        id = "harbour", name = "Harbour Blue",
-        background = Color(0xFF0A1420), backgroundAlt = Color(0xFF15304A),
-        surface = Color(0x1FFFFFFF), accent = Color(0xFF93C5E8),
-        text = Color(0xFFEFF5FA), muted = Color(0xFF94A6B6),
+        id = "black_pearl", name = "Black Pearl",
+        background = Color(0xFF121214), backgroundAlt = Color(0xFF1D1C21),
+        surface = Color(0x14F1EEE8), accent = Color(0xFFD8CEC6),
+        text = Kumo, muted = Color(0xFF9C99A3),
+        mist = listOf(Color(0xFFB79AA2).copy(alpha = 0.16f), Color(0xFF8FA3B3).copy(alpha = 0.14f), Sandstone.copy(alpha = 0.08f)),
     ),
 )
 
@@ -73,14 +85,22 @@ fun paletteFor(id: String): AkoyaPalette = Palettes.firstOrNull { it.id == id } 
 val LocalPalette = staticCompositionLocalOf { Palettes.first() }
 val LocalConfig = staticCompositionLocalOf { LauncherConfig() }
 
+/** Jost: the open stand-in the signage uses for Beausite Classic. */
+val Jost = FontFamily(
+    Font(R.font.jost_extralight, FontWeight.ExtraLight),
+    Font(R.font.jost_light, FontWeight.Light),
+    Font(R.font.jost_regular, FontWeight.Normal),
+    Font(R.font.jost_medium, FontWeight.Medium),
+)
+
 object AkoyaType {
-    val display = TextStyle(fontFamily = FontFamily.Serif, fontWeight = FontWeight.Light, fontSize = 88.sp, letterSpacing = 2.sp)
-    val wordmark = TextStyle(fontFamily = FontFamily.Serif, fontWeight = FontWeight.Normal, fontSize = 22.sp, letterSpacing = 8.sp)
-    val title = TextStyle(fontFamily = FontFamily.Serif, fontWeight = FontWeight.Normal, fontSize = 30.sp, letterSpacing = 0.5.sp)
-    val section = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Medium, fontSize = 15.sp, letterSpacing = 2.sp)
-    val body = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Normal, fontSize = 16.sp)
-    val label = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Medium, fontSize = 14.sp)
-    val small = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Normal, fontSize = 12.sp)
+    val display = TextStyle(fontFamily = Jost, fontWeight = FontWeight.ExtraLight, fontSize = 96.sp, letterSpacing = (-2).sp)
+    val wordmark = TextStyle(fontFamily = Jost, fontWeight = FontWeight.Light, fontSize = 24.sp, letterSpacing = 0.5.sp)
+    val title = TextStyle(fontFamily = Jost, fontWeight = FontWeight.Light, fontSize = 28.sp)
+    val section = TextStyle(fontFamily = Jost, fontWeight = FontWeight.Medium, fontSize = 13.sp, letterSpacing = 3.4.sp)
+    val body = TextStyle(fontFamily = Jost, fontWeight = FontWeight.Normal, fontSize = 16.sp)
+    val label = TextStyle(fontFamily = Jost, fontWeight = FontWeight.Medium, fontSize = 14.sp, letterSpacing = 0.4.sp)
+    val small = TextStyle(fontFamily = Jost, fontWeight = FontWeight.Normal, fontSize = 12.sp, letterSpacing = 0.2.sp)
 }
 
 @Composable

@@ -1,5 +1,9 @@
 package com.akoya.home.ui.apps
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
+import androidx.compose.runtime.CompositionLocalProvider
+import com.akoya.home.ui.components.ListScrollSpec
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -34,6 +38,7 @@ import com.akoya.home.ui.theme.LocalPalette
 
 private enum class AppSort(val label: String) { NAME("A–Z"), NEWEST("Newest") }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun AppsScreen(controller: LauncherController, config: LauncherConfig, apps: List<AppInfo>) {
     val p = LocalPalette.current
@@ -70,6 +75,7 @@ fun AppsScreen(controller: LauncherController, config: LauncherConfig, apps: Lis
             color = p.muted,
             modifier = Modifier.padding(start = 56.dp, bottom = 4.dp),
         )
+        CompositionLocalProvider(LocalBringIntoViewSpec provides ListScrollSpec) {
         LazyVerticalGrid(
             columns = GridCells.Fixed(5),
             contentPadding = PaddingValues(start = 56.dp, end = 56.dp, top = 16.dp, bottom = 80.dp),
@@ -85,6 +91,7 @@ fun AppsScreen(controller: LauncherController, config: LauncherConfig, apps: Lis
                     onLongClick = { controller.appOptionsFor = app },
                 )
             }
+        }
         }
     }
 }
