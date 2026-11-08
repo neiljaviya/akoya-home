@@ -31,6 +31,9 @@ import androidx.compose.material.icons.filled.DisplaySettings
 import androidx.compose.material.icons.filled.Input
 import androidx.compose.material.icons.filled.Nightlight
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.HealthAndSafety
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Wifi
@@ -157,6 +160,8 @@ private fun SectionView(
             if (pkg == null) return
             if (app == null) {
                 AppMissingRow(controller, section.title, pkg, initialFocus)
+            } else if (hasTmdb(config, pkg)) {
+                TmdbSection(controller, config, section.title, app, CONTENT_WIDTH * scale, initialFocus)
             } else {
                 val result by produceState<ContentResult?>(null, controller.refreshTick, pkg) {
                     value = controller.content.appPrograms(pkg)
@@ -194,6 +199,10 @@ private fun HeroSection(config: LauncherConfig) {
             .fillMaxWidth()
             .padding(start = 56.dp, top = 6.dp, bottom = 10.dp),
     ) {
+        val festival = com.akoya.home.ui.theme.LocalFestival.current?.takeIf { !it.isSeason }
+        if (festival != null) {
+            Text(festival.greeting.uppercase(), style = AkoyaType.section, color = p.accent)
+        }
         if (config.showGreeting) {
             val name = config.greetingName.takeIf { it.isNotBlank() }?.let { ", $it" } ?: ""
             Text("${greetingFor(now)}$name", style = AkoyaType.title, color = p.muted)
@@ -414,7 +423,10 @@ private fun ShortcutsRow(controller: LauncherController, title: String, scale: F
     val p = LocalPalette.current
     val shortcuts = remember(controller) {
         listOf(
-            Shortcut("Akoya settings", Icons.Filled.Palette) { controller.tab = Tab.SETTINGS },
+            Shortcut("Settings", Icons.Filled.Palette) { controller.tab = Tab.SETTINGS },
+            Shortcut("Phone page", Icons.Filled.PhoneAndroid) { controller.settingsPage = "PHONE"; controller.tab = Tab.SETTINGS },
+            Shortcut("TV health", Icons.Filled.HealthAndSafety) { controller.settingsPage = "HEALTH"; controller.tab = Tab.SETTINGS },
+            Shortcut("Files", Icons.Filled.Folder) { controller.tab = Tab.FILES },
             Shortcut("All apps", Icons.Filled.Apps) { controller.tab = Tab.APPS },
             Shortcut("Search", Icons.Filled.Search) { controller.openSearch() },
             Shortcut("Screensaver", Icons.Filled.Nightlight) { controller.screensaverVisible = true },

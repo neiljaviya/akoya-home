@@ -13,6 +13,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.akoya.home.R
+import com.akoya.home.data.Festival
 import com.akoya.home.data.LauncherConfig
 
 /**
@@ -103,15 +104,26 @@ object AkoyaType {
     val small = TextStyle(fontFamily = Jost, fontWeight = FontWeight.Normal, fontSize = 12.sp, letterSpacing = 0.2.sp)
 }
 
+val LocalFestival = staticCompositionLocalOf<Festival?> { null }
+
+/** Applies a festival's accent and glow on top of the chosen theme. Seasons only tint the glow. */
+fun AkoyaPalette.withFestival(f: Festival?): AkoyaPalette {
+    if (f == null) return this
+    val glow = Color(f.glow)
+    val tinted = listOf(glow.copy(alpha = if (isLight) 0.42f else 0.20f)) + mist.drop(1)
+    return if (f.isSeason) copy(mist = tinted)
+    else copy(accent = Color(if (isLight) f.accentLight else f.accentDark), mist = tinted)
+}
+
 @Composable
-fun AkoyaTheme(config: LauncherConfig, content: @Composable () -> Unit) {
-    val p = paletteFor(config.themeId)
+fun AkoyaTheme(config: LauncherConfig, festival: Festival? = null, content: @Composable () -> Unit) {
+    val p = paletteFor(config.themeId).withFestival(festival)
     val scheme = if (p.isLight) {
         lightColorScheme(primary = p.accent, background = p.background, surface = p.backgroundAlt, onSurface = p.text, onBackground = p.text)
     } else {
         darkColorScheme(primary = p.accent, background = p.background, surface = p.backgroundAlt, onSurface = p.text, onBackground = p.text)
     }
     MaterialTheme(colorScheme = scheme) {
-        CompositionLocalProvider(LocalPalette provides p, LocalConfig provides config, content = content)
+        CompositionLocalProvider(LocalPalette provides p, LocalConfig provides config, LocalFestival provides festival, content = content)
     }
 }

@@ -10,6 +10,14 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.runtime.LaunchedEffect
 import kotlinx.coroutines.delay
 import com.akoya.home.ui.components.ListScrollSpec
+import android.content.Intent
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.produceState
+import com.akoya.home.data.Festivals
+import com.akoya.home.data.HealthCheck
+import com.akoya.home.data.HealthReport
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -61,6 +69,8 @@ private enum class SettingsTab(val label: String) {
     LAYOUT("Home layout"),
     CLOCK("Clock"),
     SCREENSAVER("Screensaver"),
+    HEALTH("TV health"),
+    PHONE("Phone & files"),
     APPS("Apps"),
     SETUP("Setup & backup"),
 }
@@ -71,7 +81,15 @@ private const val PKG = "com.akoya.home"
 @Composable
 fun SettingsScreen(controller: LauncherController, config: LauncherConfig, apps: List<AppInfo>) {
     val p = LocalPalette.current
-    var tab by remember { mutableStateOf(SettingsTab.APPEARANCE) }
+    var tab by remember {
+        mutableStateOf(controller.settingsPage?.let { req -> SettingsTab.entries.firstOrNull { it.name == req } } ?: SettingsTab.APPEARANCE)
+    }
+    LaunchedEffect(Unit) { controller.settingsPage = null }
+    var healthRun by remember { mutableIntStateOf(0) }
+    val health by produceState<HealthReport?>(null, healthRun, tab == SettingsTab.HEALTH) {
+        if (tab == SettingsTab.HEALTH) value = HealthCheck.run(controller.context)
+    }
+    var healthAppFor by remember { mutableStateOf<String?>(null) }
 
     // Dialog state for the layout editor
     var editingId by remember { mutableStateOf<String?>(null) }
@@ -92,7 +110,8 @@ fun SettingsScreen(controller: LauncherController, config: LauncherConfig, apps:
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier
-                .padding(start = 56.dp, end = 56.dp, top = 16.dp, bottom = 4.dp)
+                .padding(start = 56.dp, top = 16.dp, bottom = 4.dp)
+                .horizontalScroll(rememberScrollState())
                 // Entering the tab strip always lands on the open tab, never the nearest one.
                 .focusRestorer { tabFocus[tab] ?: FocusRequester.Default }
                 .focusGroup(),
@@ -111,6 +130,7 @@ fun SettingsScreen(controller: LauncherController, config: LauncherConfig, apps:
                     focusRequester = tabFocus[t],
                 )
             }
+            Spacer(Modifier.width(56.dp))
         }
         CompositionLocalProvider(LocalBringIntoViewSpec provides ListScrollSpec) {
         LazyColumn(
@@ -127,6 +147,13 @@ fun SettingsScreen(controller: LauncherController, config: LauncherConfig, apps:
                 )
                 SettingsTab.CLOCK -> clock(controller, config, onEditName = { editingName = true })
                 SettingsTab.SCREENSAVER -> screensaver(controller, config)
+                SettingsTab.HEALTH -> healthTab(health, onRerun = { healthRun++ }, onItem = { item ->
+                    when {
+                        item.pkg != null -> healthAppFor = item.pkg
+                        item.intent != null -> controller.apps.startFirst(item.intent, Intent(android.provider.Settings.ACTION_SETTINGS))
+                    }
+                })
+                SettingsTab.PHONE -> phoneTab(controller, config)
                 SettingsTab.APPS -> appsTab(controller, config, apps)
                 SettingsTab.SETUP -> setup(controller, onReset = { confirmReset = true }, onTakeover = { showTakeoverHelp = true })
             }
@@ -240,6 +267,19 @@ fun SettingsScreen(controller: LauncherController, config: LauncherConfig, apps:
         )
     }
 
+    healthAppFor?.let { pkg ->
+        OptionsDialog(
+            title = controller.apps.labelFor(pkg),
+            subtitle = pkg,
+            onDismiss = { healthAppFor = null },
+            options = listOf(
+                DialogOption("Uninstall", Icons.Filled.Delete) { controller.apps.uninstall(pkg); healthRun++ },
+                DialogOption("App info") { controller.apps.openAppInfo(pkg) },
+                DialogOption("Close") {},
+            ),
+        )
+    }
+
     if (showTakeoverHelp) {
         OptionsDialog(
             title = "Home button takeover",
@@ -332,6 +372,24 @@ private fun LazyListScope.appearance(controller: LauncherController, config: Lau
             },
             onSelect = { z -> store.update { it.copy(focusZoom = z) } },
         )
+    }
+    item {
+        val ids = listOf("auto", "off") + Festivals.catalog.filter { !it.isSeason }.map { it.id }
+        ChoiceRow(
+            title = "Festival themes",
+            subtitle = "Accent colours, greeting and screensaver art for Diwali, Holi, Uttarayan, Navratri, Christmas…",
+            options = ids,
+            selected = config.festivalMode,
+            label = { id -> when (id) { "auto" -> "Automatic"; "off" -> "Off"; else -> "Preview: " + (Festivals.byId(id)?.name ?: id) } },
+            onSelect = { m -> store.update { it.copy(festivalMode = m) } },
+        )
+    }
+    item { ToggleRow("Seasonal art", config.seasonalArt, { v -> store.update { it.copy(seasonalArt = v) } }, "Snow, spring petals, monsoon rain and autumn leaves between festivals") }
+    item {
+        val today = java.time.LocalDate.now()
+        val now = Festivals.active(today, config.festivalMode, config.seasonalArt)
+        val next = Festivals.upcoming(today.plusDays(1), 3).joinToString(" · ") { (f, d) -> "${f.name} ${d.dayOfMonth} ${d.month.name.take(3).lowercase().replaceFirstChar { it.uppercase() }}" }
+        SettingsNote("Now: ${now?.name ?: "none"}   ·   Coming up: $next")
     }
     item { ToggleRow("App names under tiles", config.showAppLabels, { v -> store.update { it.copy(showAppLabels = v) } }) }
     item { ToggleRow("Animations", config.animations, { v -> store.update { it.copy(animations = v) } }, "Turn off for the snappiest feel on slower TVs") }

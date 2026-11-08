@@ -57,7 +57,13 @@ fun LauncherRoot(controller: LauncherController) {
         }
     }
 
-    AkoyaTheme(config) {
+    val clock by com.akoya.home.ui.components.rememberNow(withSeconds = false)
+    val today = clock.toLocalDate()
+    val festival = remember(today, config.festivalMode, config.seasonalArt) {
+        com.akoya.home.data.Festivals.active(today, config.festivalMode, config.seasonalArt)
+    }
+
+    AkoyaTheme(config, festival) {
         CompositionLocalProvider(LocalLauncher provides controller) {
             val p = LocalPalette.current
             val navFocus = remember { Tab.entries.associateWith { FocusRequester() } }
@@ -78,6 +84,7 @@ fun LauncherRoot(controller: LauncherController) {
                         when (tab) {
                             Tab.HOME -> HomeScreen(controller, config, apps)
                             Tab.APPS -> AppsScreen(controller, config, apps)
+                            Tab.FILES -> com.akoya.home.ui.files.FilesScreen(controller)
                             Tab.SHOP -> ShopScreen(controller, apps)
                             Tab.SETTINGS -> SettingsScreen(controller, config, apps)
                         }

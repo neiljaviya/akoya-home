@@ -52,6 +52,7 @@ fun SettingRow(
     onClick: () -> Unit = {},
     onLeft: (() -> Unit)? = null,
     onRight: (() -> Unit)? = null,
+    valueColor: Color? = null,
 ) {
     val p = LocalPalette.current
     var focused by remember { mutableStateOf(false) }
@@ -81,7 +82,7 @@ fun SettingRow(
         if (value != null) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (onLeft != null) Icon(Icons.Filled.ChevronLeft, null, tint = if (focused) p.accent else Color.Transparent)
-                Text(value, style = AkoyaType.label, color = p.accent, modifier = Modifier.padding(horizontal = 6.dp))
+                Text(value, style = AkoyaType.label, color = valueColor ?: p.accent, modifier = Modifier.padding(horizontal = 6.dp))
                 if (onRight != null) Icon(Icons.Filled.ChevronRight, null, tint = if (focused) p.accent else Color.Transparent)
             }
         }

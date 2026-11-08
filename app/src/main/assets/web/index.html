@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#141311">
+<title>TV companion</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jost:wght@200;300;400;500&display=swap">
+<style>
+:root{--obsidian:#141311;--kumo:#f1eee8;--sand:#c8b79d;--sanddeep:#8c795e;--ash:#a39d91;--card:#1f1d1a;--line:rgba(241,238,232,.12);--danger:#e0705a}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--obsidian);color:var(--kumo);font-family:Jost,"Helvetica Neue",Arial,sans-serif;-webkit-font-smoothing:antialiased}
+body{padding:max(16px,env(safe-area-inset-top)) 16px calc(90px + env(safe-area-inset-bottom))}
+h1{font-weight:200;font-size:34px;margin:6px 0 2px;letter-spacing:-.01em}
+.eyebrow{font-size:11px;font-weight:500;letter-spacing:.26em;text-transform:uppercase;color:var(--sand)}
+.muted{color:var(--ash);font-size:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px;margin:14px 0}
+button,.btn{font:inherit;font-weight:500;font-size:15px;border:0;border-radius:999px;padding:11px 18px;background:var(--kumo);color:var(--obsidian);cursor:pointer;text-decoration:none;display:inline-block}
+button.ghost,.btn.ghost{background:transparent;color:var(--kumo);border:1px solid var(--line)}
+button.danger{background:transparent;color:var(--danger);border:1px solid rgba(224,112,90,.4)}
+button:disabled{opacity:.4}
+input,select{font:inherit;font-size:16px;color:var(--kumo);background:#2a2724;border:1px solid var(--line);border-radius:12px;padding:10px 12px;width:100%}
+input[type=range]{padding:0;background:none;border:0;accent-color:var(--sand)}
+label{display:block;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:var(--ash);margin:12px 0 6px}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.grow{flex:1}
+.seg{display:flex;background:#2a2724;border-radius:999px;padding:4px;gap:4px}
+.seg button{flex:1;background:transparent;color:var(--kumo);padding:9px 10px;font-size:14px}
+.seg button.on{background:var(--kumo);color:var(--obsidian)}
+nav{position:fixed;left:0;right:0;bottom:0;background:rgba(20,19,17,.94);backdrop-filter:blur(12px);border-top:1px solid var(--line);display:flex;padding:10px 10px calc(10px + env(safe-area-inset-bottom))}
+nav button{flex:1;background:transparent;color:var(--ash);font-size:13px;letter-spacing:.14em;text-transform:uppercase;padding:10px 4px}
+nav button.on{color:var(--kumo)}
+#stage{width:100%;border-radius:14px;background:#000;touch-action:none;display:block}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+.thumb{background:#000;border-radius:12px;overflow:hidden;border:1px solid var(--line)}
+.thumb img{width:100%;aspect-ratio:16/9;object-fit:cover;display:block}
+.thumb .meta{padding:8px 10px;font-size:13px}
+.thumb .meta .row{gap:6px;margin-top:6px}
+.thumb button{padding:6px 10px;font-size:12px}
+.tag{font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--sand)}
+.file{display:flex;align-items:center;gap:12px;padding:12px 4px;border-bottom:1px solid var(--line)}
+.file .ic{width:34px;height:34px;border-radius:10px;background:#2a2724;display:flex;align-items:center;justify-content:center;font-size:16px;flex:none}
+.file .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file .sz{color:var(--ash);font-size:12px}
+.file button{padding:6px 10px;font-size:12px}
+.crumbs{font-size:13px;color:var(--ash);word-break:break-all;margin:6px 0 10px}
+.toast{position:fixed;left:50%;bottom:96px;transform:translateX(-50%);background:var(--kumo);color:var(--obsidian);padding:10px 16px;border-radius:999px;font-size:14px;opacity:0;transition:opacity .3s;pointer-events:none;max-width:90%}
+.toast.on{opacity:1}
+.hidden{display:none!important}
+.bar{height:4px;background:#2a2724;border-radius:4px;overflow:hidden;margin-top:8px}
+.bar i{display:block;height:100%;width:0;background:var(--sand);transition:width .2s}
+</style>
+</head>
+<body>
+<div class="eyebrow" id="brandEyebrow">TV companion</div>
+<h1 id="brand">Connecting…</h1>
+<div class="muted" id="statusLine"></div>
+
+<!-- PIN gate -->
+<section id="gate" class="card hidden">
+  <div class="eyebrow">Enter the PIN shown on the TV</div>
+  <p class="muted">TV → Settings → Phone &amp; files</p>
+  <div class="row"><input id="pinInput" inputmode="numeric" maxlength="4" placeholder="4-digit PIN" class="grow"><button id="pinGo">Connect</button></div>
+</section>
+
+<!-- PHOTOS -->
+<section id="tab-photos" class="hidden">
+  <div class="card">
+    <div class="eyebrow">Add photos</div>
+    <label>Save to</label>
+    <div class="seg" id="destSeg"><button data-v="screensaver" class="on">Screensaver</button><button data-v="wallpapers">Wallpaper</button></div>
+    <div class="row" style="margin-top:14px"><label class="btn" style="margin:0;letter-spacing:0;text-transform:none;font-size:15px;color:var(--obsidian)">Choose photos<input id="pick" type="file" accept="image/*" multiple class="hidden"></label><span class="muted" id="queueInfo"></span></div>
+  </div>
+
+  <div class="card hidden" id="editor">
+    <div class="row"><div class="eyebrow grow" id="edTitle">Edit</div><span class="muted" id="edDims"></span></div>
+    <canvas id="stage" style="margin-top:10px"></canvas>
+    <p class="muted" style="margin:6px 0 0">Drag to move · pinch or use Zoom to scale</p>
+
+    <label>Size</label>
+    <select id="size">
+      <option value="1920x1080">TV · 1920 × 1080 (recommended)</option>
+      <option value="3840x2160">4K TV · 3840 × 2160</option>
+      <option value="1280x720">HD · 1280 × 720</option>
+      <option value="1080x1080">Square · 1080 × 1080</option>
+      <option value="1080x1920">Portrait · 1080 × 1920</option>
+      <option value="original">Original size</option>
+      <option value="custom">Custom…</option>
+    </select>
+    <div class="row hidden" id="customRow" style="margin-top:8px"><input id="cw" type="number" placeholder="Width" class="grow"><span>×</span><input id="ch" type="number" placeholder="Height" class="grow"></div>
+
+    <label>Fit</label>
+    <div class="seg" id="fitSeg"><button data-v="fill" class="on">Fill &amp; crop</button><button data-v="blur">Fit + blur</button><button data-v="bars">Fit + colour</button></div>
+    <div class="row hidden" id="barRow" style="margin-top:8px"><span class="muted grow">Background colour</span><input id="barColor" type="color" value="#141311" style="width:60px;height:40px;padding:2px"></div>
+
+    <label>Zoom <span id="zoomVal"></span></label>
+    <input id="zoom" type="range" min="1" max="4" step="0.01" value="1">
+    <label>Brightness <span id="brightVal"></span></label>
+    <input id="bright" type="range" min="-60" max="40" step="1" value="0">
+    <label>Quality <span id="qualVal"></span></label>
+    <input id="qual" type="range" min="60" max="98" step="1" value="88">
+    <label>File name</label>
+    <input id="fname">
+    <div class="row" style="margin-top:16px">
+      <button class="ghost" id="rot">Rotate 90°</button>
+      <button class="ghost" id="center">Re-centre</button>
+      <span class="grow"></span>
+      <button class="ghost" id="skip">Skip</button>
+      <button id="save">Save to TV</button>
+    </div>
+    <div class="bar"><i id="saveBar"></i></div>
+  </div>
+
+  <div class="card">
+    <div class="row"><div class="eyebrow grow">On the TV</div><div class="seg" id="libSeg" style="width:220px"><button data-v="screensaver" class="on">Screensaver</button><button data-v="wallpapers">Wallpaper</button></div></div>
+    <p class="muted" id="libInfo"></p>
+    <div class="grid" id="lib"></div>
+  </div>
+</section>
+
+<!-- FILES -->
+<section id="tab-files" class="hidden">
+  <div class="card">
+    <div class="eyebrow">Storage</div>
+    <div class="row" id="roots" style="margin-top:10px"></div>
+    <div class="crumbs" id="crumbs"></div>
+    <div class="row">
+      <button class="ghost" id="up">↑ Up</button>
+      <button class="ghost" id="mkdir">New folder</button>
+      <span class="grow"></span>
+      <label class="btn" style="margin:0;letter-spacing:0;text-transform:none;font-size:15px;color:var(--obsidian)">Upload<input id="upPick" type="file" multiple class="hidden"></label>
+    </div>
+    <div class="bar hidden" id="upBarWrap"><i id="upBar"></i></div>
+    <div id="files" style="margin-top:8px"></div>
+  </div>
+</section>
+
+<!-- TV -->
+<section id="tab-tv" class="hidden">
+  <div class="card">
+    <div class="eyebrow">Name on screen</div>
+    <div class="row" style="margin-top:10px"><input id="brandIn" class="grow"><button id="brandSave">Save</button></div>
+  </div>
+  <div class="card">
+    <div class="eyebrow">Screensaver</div>
+    <label>Style</label>
+    <select id="ssStyle"></select>
+  </div>
+  <div class="card">
+    <div class="eyebrow">Festivals &amp; seasons</div>
+    <label>Festival theme</label>
+    <select id="festMode"></select>
+    <label>Seasonal art (snow, petals, rain, leaves)</label>
+    <div class="seg" id="seasonSeg"><button data-v="true">On</button><button data-v="false">Off</button></div>
+  </div>
+  <div class="card">
+    <div class="eyebrow">Trending covers (TMDB)</div>
+    <p class="muted">Free key from themoviedb.org → Settings → API. Paste the <b>API key</b> or the <b>API Read Access Token</b>.</p>
+    <label>Key</label>
+    <input id="tmdbKey" placeholder="Paste key" autocomplete="off">
+    <label>Region</label>
+    <select id="tmdbRegion">
+      <option value="IN">India</option><option value="CA">Canada</option><option value="US">United States</option><option value="GB">United Kingdom</option><option value="AE">UAE</option><option value="AU">Australia</option>
+    </select>
+    <div class="row" style="margin-top:14px"><span class="muted grow" id="tmdbState"></span><button class="danger" id="tmdbClear">Remove</button><button id="tmdbSave">Save</button></div>
+  </div>
+  <div class="card">
+    <div class="eyebrow">This phone</div>
+    <p class="muted">Signed in with PIN. <a href="#" id="forget" style="color:var(--sand)">Forget PIN</a></p>
+  </div>
+</section>
+
+<nav class="hidden" id="nav">
+  <button data-t="photos" class="on">Photos</button>
+  <button data-t="files">Files</button>
+  <button data-t="tv">TV</button>
+</nav>
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+let PIN = new URLSearchParams(location.search).get('pin') || localStorage.getItem('tvpin') || '';
+const toast = (m) => { const t = $('#toast'); t.textContent = m; t.classList.add('on'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('on'), 2600); };
+const api = async (path, opts = {}) => {
+  const r = await fetch('/api' + path, { ...opts, headers: { 'X-Pin': PIN, ...(opts.headers || {}) } });
+  if (r.status === 401) { showGate(); throw new Error('PIN'); }
+  const ct = r.headers.get('content-type') || '';
+  const data = ct.includes('json') ? await r.json() : await r.text();
+  if (!r.ok) throw new Error((data && data.error) || ('Error ' + r.status));
+  return data;
+};
+const q = (o) => Object.entries(o).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&');
+const fmt = (b) => b > 1e9 ? (b / 1e9).toFixed(1) + ' GB' : b > 1e6 ? (b / 1e6).toFixed(1) + ' MB' : b > 1e3 ? Math.round(b / 1e3) + ' KB' : b + ' B';
+const seg = (id, cb) => $$(id + ' button').forEach(b => b.onclick = () => { $$(id + ' button').forEach(x => x.classList.toggle('on', x === b)); cb(b.dataset.v); });
+const setSeg = (id, v) => $$(id + ' button').forEach(x => x.classList.toggle('on', x.dataset.v === String(v)));
+
+function showGate() { $('#gate').classList.remove('hidden'); $('#nav').classList.add('hidden'); $$('section[id^=tab-]').forEach(s => s.classList.add('hidden')); $('#brand').textContent = 'Connect to your TV'; }
+$('#pinGo').onclick = () => { PIN = $('#pinInput').value.trim(); localStorage.setItem('tvpin', PIN); boot(); };
+$('#forget').onclick = (e) => { e.preventDefault(); localStorage.removeItem('tvpin'); PIN = ''; showGate(); };
+
+let STATUS = {};
+async function boot() {
+  try {
+    STATUS = await api('/status');
+    localStorage.setItem('tvpin', PIN);
+    if (location.search.includes('pin=')) history.replaceState(null, '', '/');
+  } catch (e) { if (e.message !== 'PIN') { $('#brand').textContent = 'TV not reachable'; $('#statusLine').textContent = e.message; } return; }
+  $('#gate').classList.add('hidden'); $('#nav').classList.remove('hidden');
+  $('#brand').textContent = STATUS.brand; $('#brandIn').value = STATUS.brand;
+  $('#statusLine').textContent = `${STATUS.screensaverCount} screensaver · ${STATUS.wallpaperCount} wallpaper photos · ${fmt(STATUS.freeBytes)} free` + (STATUS.festivalNow ? ` · ${STATUS.festivalNow} theme on` : '');
+  $('#ssStyle').innerHTML = STATUS.styles.map(s => `<option value="${s.id}">${s.label}</option>`).join(''); $('#ssStyle').value = STATUS.screensaverStyle;
+  $('#festMode').innerHTML = `<option value="auto">Automatic (follow the calendar)</option><option value="off">Off</option>` + STATUS.festivals.map(f => `<option value="${f.id}">Preview: ${f.name}</option>`).join('');
+  $('#festMode').value = STATUS.festivalMode; setSeg('#seasonSeg', STATUS.seasonalArt);
+  $('#tmdbRegion').value = STATUS.tmdbRegion; $('#tmdbState').textContent = STATUS.tmdb ? 'Key saved ✓' : 'No key yet';
+  showTab(localStorage.getItem('tvtab') || 'photos');
+}
+function showTab(t) {
+  localStorage.setItem('tvtab', t);
+  $$('nav button').forEach(b => b.classList.toggle('on', b.dataset.t === t));
+  $$('section[id^=tab-]').forEach(s => s.classList.toggle('hidden', s.id !== 'tab-' + t));
+  if (t === 'photos') loadLib(); if (t === 'files') loadRoots();
+}
+$$('nav button').forEach(b => b.onclick = () => showTab(b.dataset.t));
+
+// ------------------------------------------------------------ Photo editor
+let dest = 'screensaver', lib = 'screensaver';
+seg('#destSeg', v => dest = v);
+seg('#libSeg', v => { lib = v; loadLib(); });
+const queue = []; let img = null;
+const st = { fit: 'fill', zoom: 1, px: 0, py: 0, rot: 0, bright: 0, qual: 88, bar: '#141311' };
+const cv = $('#stage'), cx = cv.getContext('2d');
+
+$('#pick').onchange = (e) => { queue.push(...e.target.files); e.target.value = ''; next(); };
+function next() {
+  $('#queueInfo').textContent = queue.length ? `${queue.length} waiting` : '';
+  if (!queue.length) { $('#editor').classList.add('hidden'); img = null; return; }
+  const f = queue.shift();
+  const url = URL.createObjectURL(f);
+  const im = new Image();
+  im.onload = () => {
+    img = im; Object.assign(st, { zoom: 1, px: 0, py: 0, rot: 0, bright: 0 });
+    $('#zoom').value = 1; $('#bright').value = 0;
+    $('#fname').value = (f.name || 'photo').replace(/\.[^.]+$/, '').replace(/[^\w\- ]+/g, '').trim().slice(0, 60) || ('photo-' + Date.now());
+    $('#edTitle').textContent = f.name || 'Photo'; $('#editor').classList.remove('hidden');
+    $('#queueInfo').textContent = queue.length ? `${queue.length} more after this` : '';
+    $('#saveBar').style.width = '0';
+    draw(); $('#editor').scrollIntoView({ behavior: 'smooth' });
+  };
+  im.onerror = () => { toast("Couldn't open " + f.name); next(); };
+  im.src = url;
+}
+function outSize() {
+  const v = $('#size').value;
+  if (v === 'original') { const r = st.rot % 180 !== 0; return img ? [r ? img.height : img.width, r ? img.width : img.height] : [1920, 1080]; }
+  if (v === 'custom') return [Math.max(64, +$('#cw').value || 1920), Math.max(64, +$('#ch').value || 1080)];
+  return v.split('x').map(Number);
+}
+function render(ctx, W, H) {
+  ctx.save();
+  ctx.fillStyle = st.fit === 'bars' ? st.bar : '#000'; ctx.fillRect(0, 0, W, H);
+  const r = st.rot % 180 !== 0, iw = r ? img.height : img.width, ih = r ? img.width : img.height;
+  const cover = Math.max(W / iw, H / ih), contain = Math.min(W / iw, H / ih);
+  const put = (c, s, ox, oy) => { c.save(); c.translate(ox, oy); c.rotate(st.rot * Math.PI / 180); c.drawImage(img, -img.width * s / 2, -img.height * s / 2, img.width * s, img.height * s); c.restore(); };
+  if (st.fit === 'blur') {
+    // Blur by drawing tiny and scaling up (works on every browser).
+    const tw = 48, th = Math.max(1, Math.round(48 * H / W));
+    const t = document.createElement('canvas'); t.width = tw; t.height = th; const tc = t.getContext('2d');
+    put(tc, Math.max(tw / iw, th / ih) * 1.15, tw / 2, th / 2);
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(t, 0, 0, W, H);
+    ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.fillRect(0, 0, W, H);
+  }
+  const s = (st.fit === 'fill' ? cover : contain) * st.zoom;
+  put(ctx, s, W / 2 + st.px * W, H / 2 + st.py * H);
+  if (st.bright < 0) { ctx.fillStyle = `rgba(0,0,0,${-st.bright / 100})`; ctx.fillRect(0, 0, W, H); }
+  if (st.bright > 0) { ctx.globalCompositeOperation = 'screen'; ctx.fillStyle = `rgba(255,255,255,${st.bright / 100})`; ctx.fillRect(0, 0, W, H); ctx.globalCompositeOperation = 'source-over'; }
+  ctx.restore();
+}
+function draw() {
+  if (!img) return;
+  const [W, H] = outSize();
+  const pw = Math.min(1200, cv.clientWidth * (window.devicePixelRatio || 1));
+  cv.width = pw; cv.height = Math.round(pw * H / W);
+  render(cx, cv.width, cv.height);
+  $('#edDims').textContent = `${W} × ${H}`;
+  $('#zoomVal').textContent = st.zoom.toFixed(2) + '×';
+  $('#brightVal').textContent = (st.bright > 0 ? '+' : '') + st.bright + '%';
+  $('#qualVal').textContent = st.qual + '%';
+}
+$('#size').onchange = () => { $('#customRow').classList.toggle('hidden', $('#size').value !== 'custom'); draw(); };
+$('#cw').oninput = $('#ch').oninput = draw;
+seg('#fitSeg', v => { st.fit = v; $('#barRow').classList.toggle('hidden', v !== 'bars'); draw(); });
+$('#barColor').oninput = (e) => { st.bar = e.target.value; draw(); };
+$('#zoom').oninput = (e) => { st.zoom = +e.target.value; draw(); };
+$('#bright').oninput = (e) => { st.bright = +e.target.value; draw(); };
+$('#qual').oninput = (e) => { st.qual = +e.target.value; draw(); };
+$('#rot').onclick = () => { st.rot = (st.rot + 90) % 360; draw(); };
+$('#center').onclick = () => { st.px = st.py = 0; st.zoom = 1; $('#zoom').value = 1; draw(); };
+$('#skip').onclick = next;
+window.addEventListener('resize', draw);
+
+// drag to pan, pinch to zoom
+const pts = new Map(); let pinch0 = 0, zoom0 = 1;
+cv.addEventListener('pointerdown', e => { cv.setPointerCapture(e.pointerId); pts.set(e.pointerId, [e.clientX, e.clientY]); if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch0 = Math.hypot(a[0] - b[0], a[1] - b[1]); zoom0 = st.zoom; } });
+cv.addEventListener('pointermove', e => {
+  if (!pts.has(e.pointerId)) return;
+  const prev = pts.get(e.pointerId); pts.set(e.pointerId, [e.clientX, e.clientY]);
+  if (pts.size === 2) { const [a, b] = [...pts.values()]; const d = Math.hypot(a[0] - b[0], a[1] - b[1]); st.zoom = Math.min(4, Math.max(1, zoom0 * d / pinch0)); $('#zoom').value = st.zoom; }
+  else { st.px += (e.clientX - prev[0]) / cv.clientWidth; st.py += (e.clientY - prev[1]) / cv.clientHeight; }
+  draw();
+});
+['pointerup', 'pointercancel'].forEach(t => cv.addEventListener(t, e => pts.delete(e.pointerId)));
+
+$('#save').onclick = async () => {
+  if (!img) return;
+  const [W, H] = outSize();
+  const c = document.createElement('canvas'); c.width = W; c.height = H; render(c.getContext('2d'), W, H);
+  const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', st.qual / 100));
+  const name = ($('#fname').value.trim() || ('photo-' + Date.now())) + '.jpg';
+  $('#save').disabled = true;
+  try {
+    await upload(`/api/image?${q({ folder: dest, name })}`, blob, p => $('#saveBar').style.width = (p * 100) + '%');
+    toast('Saved to ' + (dest === 'wallpapers' ? 'wallpapers' : 'screensaver'));
+    if (lib === dest) loadLib();
+    next();
+  } catch (e) { toast(e.message); }
+  $('#save').disabled = false;
+};
+function upload(url, body, onProgress) {
+  return new Promise((res, rej) => {
+    const x = new XMLHttpRequest(); x.open('PUT', url); x.setRequestHeader('X-Pin', PIN);
+    x.upload.onprogress = e => e.lengthComputable && onProgress && onProgress(e.loaded / e.total);
+    x.onload = () => x.status < 300 ? res() : rej(new Error(x.status === 401 ? 'Wrong PIN' : 'Upload failed (' + x.status + ')'));
+    x.onerror = () => rej(new Error('Upload failed')); x.send(body);
+  });
+}
+async function loadLib() {
+  try {
+    const d = await api('/images?' + q({ folder: lib }));
+    $('#libInfo').textContent = d.files.length ? `${d.files.length} photos` : 'No photos yet.';
+    $('#lib').innerHTML = d.files.map(f => `
+      <div class="thumb"><img loading="lazy" src="/api/image?${q({ folder: lib, name: f.name, pin: PIN, v: f.modified })}">
+      <div class="meta"><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${f.name}</div>
+      ${lib === 'wallpapers' && d.wallpaper === f.name ? '<div class="tag">Current wallpaper</div>' : ''}
+      <div class="row">${lib === 'wallpapers' ? `<button class="ghost" data-wp="${encodeURIComponent(f.name)}">Use</button>` : ''}<button class="danger" data-del="${encodeURIComponent(f.name)}">Delete</button></div></div></div>`).join('');
+    $$('#lib [data-del]').forEach(b => b.onclick = async () => { if (!confirm('Delete this photo from the TV?')) return; await api('/image?' + q({ folder: lib, name: decodeURIComponent(b.dataset.del) }), { method: 'DELETE' }); loadLib(); });
+    $$('#lib [data-wp]').forEach(b => b.onclick = async () => { await api('/wallpaper?' + q({ name: decodeURIComponent(b.dataset.wp) }), { method: 'POST' }); toast('Wallpaper set'); loadLib(); });
+  } catch (e) { if (e.message !== 'PIN') toast(e.message); }
+}
+
+// ------------------------------------------------------------ Files
+let cwd = null, parent = null;
+async function loadRoots() {
+  try {
+    const d = await api('/fs/roots');
+    $('#roots').innerHTML = d.roots.map(r => `<button class="ghost" data-p="${encodeURIComponent(r.path)}">${r.name}</button>`).join('');
+    $$('#roots button').forEach(b => b.onclick = () => openDir(decodeURIComponent(b.dataset.p)));
+    if (!cwd && d.roots.length) openDir(d.roots[0].path); else if (cwd) openDir(cwd);
+  } catch (e) { if (e.message !== 'PIN') toast(e.message); }
+}
+async function openDir(p) {
+  try {
+    const d = await api('/fs/list?' + q({ path: p }));
+    cwd = d.path; parent = d.parent;
+    $('#crumbs').textContent = cwd;
+    $('#up').disabled = !parent;
+    $('#files').innerHTML = d.files.length ? d.files.map(f => `
+      <div class="file"><div class="ic">${f.dir ? '📁' : icon(f.name)}</div>
+        <div class="nm" ${f.dir ? `data-open="${encodeURIComponent(f.path)}" style="cursor:pointer"` : ''}>${f.name}<div class="sz">${f.dir ? 'Folder' : fmt(f.size)} · ${new Date(f.modified).toLocaleDateString()}</div></div>
+        ${f.dir ? '' : `<a class="btn ghost" style="padding:6px 10px;font-size:12px" href="/api/fs/download?${q({ path: f.path, pin: PIN })}">Get</a>`}
+        <button class="ghost" data-ren="${encodeURIComponent(f.path)}">Rename</button>
+        <button class="danger" data-rm="${encodeURIComponent(f.path)}">Delete</button></div>`).join('') : '<p class="muted">Empty folder</p>';
+    $$('#files [data-open]').forEach(b => b.onclick = () => openDir(decodeURIComponent(b.dataset.open)));
+    $$('#files [data-rm]').forEach(b => b.onclick = async () => { const p = decodeURIComponent(b.dataset.rm); if (!confirm('Delete ' + p.split('/').pop() + '?')) return; await api('/fs/delete?' + q({ path: p }), { method: 'POST' }); openDir(cwd); });
+    $$('#files [data-ren]').forEach(b => b.onclick = async () => { const p = decodeURIComponent(b.dataset.ren); const n = prompt('New name', p.split('/').pop()); if (!n) return; await api('/fs/rename?' + q({ path: p, name: n }), { method: 'POST' }); openDir(cwd); });
+  } catch (e) { if (e.message !== 'PIN') toast(e.message.includes('Outside') ? e.message : "Can't open this folder (allow storage access on the TV: Files tab)"); }
+}
+const icon = n => /\.(jpe?g|png|webp|gif|heic)$/i.test(n) ? '🖼' : /\.(mp4|mkv|mov|avi|webm)$/i.test(n) ? '🎬' : /\.(mp3|m4a|flac|wav|aac)$/i.test(n) ? '🎵' : /\.apk$/i.test(n) ? '📦' : /\.(pdf|txt|docx?)$/i.test(n) ? '📄' : '•';
+$('#up').onclick = () => parent && openDir(parent);
+$('#mkdir').onclick = async () => { const n = prompt('Folder name'); if (!n) return; await api('/fs/mkdir?' + q({ dir: cwd, name: n }), { method: 'POST' }); openDir(cwd); };
+$('#upPick').onchange = async (e) => {
+  const files = [...e.target.files]; e.target.value = '';
+  $('#upBarWrap').classList.remove('hidden');
+  for (const [i, f] of files.entries()) {
+    try { await upload('/api/fs/upload?' + q({ dir: cwd, name: f.name }), f, p => $('#upBar').style.width = (((i + p) / files.length) * 100) + '%'); }
+    catch (err) { toast(f.name + ': ' + err.message); }
+  }
+  $('#upBarWrap').classList.add('hidden'); toast('Uploaded ' + files.length + ' file(s)'); openDir(cwd);
+};
+
+// ------------------------------------------------------------ TV settings
+const saveSettings = async (o, msg) => { try { await api('/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(o) }); toast(msg || 'Saved'); return true; } catch (e) { toast(e.message); return false; } };
+$('#brandSave').onclick = async () => { if (await saveSettings({ brandName: $('#brandIn').value.trim() }, 'Name updated')) $('#brand').textContent = $('#brandIn').value.trim(); };
+$('#ssStyle').onchange = () => saveSettings({ screensaverStyle: $('#ssStyle').value }, 'Screensaver updated');
+$('#festMode').onchange = () => saveSettings({ festivalMode: $('#festMode').value }, 'Festival theme updated');
+seg('#seasonSeg', v => saveSettings({ seasonalArt: v === 'true' }, 'Seasonal art ' + (v === 'true' ? 'on' : 'off')));
+$('#tmdbSave').onclick = async () => {
+  const key = $('#tmdbKey').value.trim();
+  $('#tmdbState').textContent = 'Checking…';
+  const ok = await saveSettings({ tmdbKey: key || undefined, tmdbRegion: $('#tmdbRegion').value }, key ? 'TMDB key saved, covers will load on the TV' : 'Region saved');
+  $('#tmdbState').textContent = ok ? (key || STATUS.tmdb ? 'Key saved ✓' : 'No key yet') : 'Not saved';
+  if (ok && key) { $('#tmdbKey').value = ''; STATUS.tmdb = true; }
+};
+$('#tmdbClear').onclick = async () => { if (await saveSettings({ tmdbKey: '' }, 'Key removed')) { STATUS.tmdb = false; $('#tmdbState').textContent = 'No key yet'; } };
+
+if (PIN) boot(); else showGate();
+})();
+</script>
+</body>
+</html>

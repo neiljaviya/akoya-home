@@ -28,6 +28,10 @@ enum class CardSize(val label: String, val scale: Float) {
 }
 
 enum class ScreensaverStyle(val label: String) {
+    SIGNAGE("Signage rotation"),
+    DAY_PROGRESS("Day progress clock"),
+    ZEN("Live life zen"),
+    FESTIVE("Festival & season art"),
     AMBIENT("Drifting mist"),
     CLOCK("Floating clock"),
     PHOTOS("Photo slideshow"),
@@ -72,7 +76,7 @@ data class SectionConfig(
 }
 
 data class ScreensaverConfig(
-    val style: ScreensaverStyle = ScreensaverStyle.AMBIENT,
+    val style: ScreensaverStyle = ScreensaverStyle.SIGNAGE,
     val idleMinutes: Int = 10,
     val photoSeconds: Int = 12,
     val showClock: Boolean = true,
@@ -87,7 +91,7 @@ data class ScreensaverConfig(
         fun fromJson(o: JSONObject?): ScreensaverConfig {
             if (o == null) return ScreensaverConfig()
             return ScreensaverConfig(
-                style = enumOrNull<ScreensaverStyle>(o.optString("style")) ?: ScreensaverStyle.AMBIENT,
+                style = enumOrNull<ScreensaverStyle>(o.optString("style")) ?: ScreensaverStyle.SIGNAGE,
                 idleMinutes = o.optInt("idleMinutes", 10),
                 photoSeconds = o.optInt("photoSeconds", 12),
                 showClock = o.optBoolean("showClock", true),
@@ -115,6 +119,12 @@ data class LauncherConfig(
     val hidden: Set<String> = emptySet(),
     val recent: List<String> = emptyList(),
     val screensaver: ScreensaverConfig = ScreensaverConfig(),
+    /** "auto" = follow the calendar, "off", or a festival id to preview it. */
+    val festivalMode: String = "auto",
+    val seasonalArt: Boolean = true,
+    val tmdbKey: String = "",
+    val tmdbRegion: String = "IN",
+    val companionPin: String = "",
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("version", 1)
@@ -136,6 +146,11 @@ data class LauncherConfig(
         .put("hidden", JSONArray(hidden.toList()))
         .put("recent", JSONArray(recent))
         .put("screensaver", screensaver.toJson())
+        .put("festivalMode", festivalMode)
+        .put("seasonalArt", seasonalArt)
+        .put("tmdbKey", tmdbKey)
+        .put("tmdbRegion", tmdbRegion)
+        .put("companionPin", companionPin)
 
     companion object {
         fun fromJson(o: JSONObject): LauncherConfig {
@@ -162,6 +177,11 @@ data class LauncherConfig(
                 hidden = o.optJSONArray("hidden").toStringList().toSet(),
                 recent = o.optJSONArray("recent").toStringList(),
                 screensaver = ScreensaverConfig.fromJson(o.optJSONObject("screensaver")),
+                festivalMode = o.optString("festivalMode", "auto").ifBlank { "auto" },
+                seasonalArt = o.optBoolean("seasonalArt", true),
+                tmdbKey = o.optString("tmdbKey", ""),
+                tmdbRegion = o.optString("tmdbRegion", "IN").ifBlank { "IN" },
+                companionPin = o.optString("companionPin", ""),
             )
         }
     }

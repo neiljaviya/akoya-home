@@ -38,6 +38,9 @@ class MainActivity : ComponentActivity() {
         }
         ContextCompat.registerReceiver(this, packageReceiver, filter, ContextCompat.RECEIVER_EXPORTED)
         lifecycleScope.launch { controller.apps.refresh() }
+        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            com.akoya.home.server.CompanionServer.ensureStarted(applicationContext)
+        }
     }
 
     override fun onResume() {

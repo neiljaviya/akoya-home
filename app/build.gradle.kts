@@ -12,8 +12,8 @@ android {
         applicationId = "com.akoya.home"
         minSdk = 28
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.2.1"
+        versionCode = 5
+        versionName = "1.3.0"
     }
 
     // Fixed key committed with the project so every build (Android Studio or CI)
@@ -64,4 +64,6 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("androidx.savedstate:savedstate-ktx:1.2.1")
     implementation("io.coil-kt:coil-compose:2.7.0")
+    implementation("org.nanohttpd:nanohttpd:2.3.1")
+    implementation("com.google.zxing:core:3.5.3")
 }

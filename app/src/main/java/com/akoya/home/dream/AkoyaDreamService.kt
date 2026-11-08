@@ -46,7 +46,8 @@ class AkoyaDreamService : DreamService(), LifecycleOwner, SavedStateRegistryOwne
             setViewTreeSavedStateRegistryOwner(this@AkoyaDreamService)
             setContent {
                 val config by store.config.collectAsState()
-                AkoyaTheme(config) { ScreensaverContent(config, store) }
+                val festival = com.akoya.home.data.Festivals.active(java.time.LocalDate.now(), config.festivalMode, config.seasonalArt)
+                AkoyaTheme(config, festival) { ScreensaverContent(config, store) }
             }
         }
         window?.decorView?.let {

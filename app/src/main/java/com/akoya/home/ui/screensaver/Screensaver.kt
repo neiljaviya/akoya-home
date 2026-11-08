@@ -38,6 +38,7 @@ import coil.compose.AsyncImage
 import com.akoya.home.data.ConfigStore
 import com.akoya.home.data.LauncherConfig
 import com.akoya.home.data.ScreensaverStyle
+import com.akoya.home.data.Festivals
 import com.akoya.home.ui.components.drawThemeGradient
 import com.akoya.home.ui.components.drawMist
 import com.akoya.home.ui.components.formatAmPm
@@ -57,8 +58,16 @@ import kotlin.random.Random
 @Composable
 fun ScreensaverContent(config: LauncherConfig, store: ConfigStore, modifier: Modifier = Modifier) {
     val ss = config.screensaver
+    val p = LocalPalette.current
+    val festival = remember(config.festivalMode, config.seasonalArt) {
+        Festivals.active(java.time.LocalDate.now(), config.festivalMode, config.seasonalArt)
+    }
     Box(modifier.fillMaxSize().background(Color.Black)) {
         when (ss.style) {
+            ScreensaverStyle.SIGNAGE -> SignageRotation(config, store, festival)
+            ScreensaverStyle.DAY_PROGRESS -> DayProgressScene(config, p)
+            ScreensaverStyle.ZEN -> ZenScene(config, p)
+            ScreensaverStyle.FESTIVE -> FestiveScene(config, festival ?: Festivals.season(java.time.LocalDate.now()), p)
             ScreensaverStyle.PHOTOS -> {
                 val photos = remember { store.images(store.screensaverDir).ifEmpty { store.images(store.wallpapersDir) } }
                 if (photos.isEmpty()) {
@@ -79,7 +88,7 @@ fun ScreensaverContent(config: LauncherConfig, store: ConfigStore, modifier: Mod
 }
 
 @Composable
-private fun Slideshow(photos: List<Any>, seconds: Int) {
+internal fun Slideshow(photos: List<Any>, seconds: Int) {
     var index by remember { mutableIntStateOf(0) }
     LaunchedEffect(photos) {
         while (true) {
@@ -142,7 +151,7 @@ private fun CenterClock(config: LauncherConfig) {
 }
 
 @Composable
-private fun CornerClock(config: LauncherConfig, modifier: Modifier) {
+internal fun CornerClock(config: LauncherConfig, modifier: Modifier) {
     val now by rememberNow(false)
     Column(modifier.padding(start = 64.dp, bottom = 48.dp)) {
         Text(formatTime(now, config.use24h, false) + " " + formatAmPm(now, config.use24h), style = AkoyaType.display.copy(fontSize = 56.sp), color = Color.White)
