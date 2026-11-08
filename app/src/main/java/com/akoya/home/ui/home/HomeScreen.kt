@@ -13,17 +13,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.runtime.CompositionLocalProvider
 import com.akoya.home.ui.components.Emphasized
-import com.akoya.home.ui.components.HomeScrollSpec
+import com.akoya.home.ui.components.NoScrollSpec
+import androidx.compose.foundation.gestures.animateScrollBy
 import com.akoya.home.ui.components.TvLazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -88,14 +84,23 @@ val CONTENT_WIDTH = 248.dp
 @Composable
 fun HomeScreen(controller: LauncherController, config: LauncherConfig, apps: List<AppInfo>) {
     val sections = config.sections.filter { it.visible }
-    // A clock section at the very top sits above the list and folds away as you scroll down.
-    val heroOnTop = sections.firstOrNull()?.type == SectionType.HERO
-    val listSections = if (heroOnTop) sections.drop(1) else sections
     val listState = rememberLazyListState()
     var focusedIndex by remember { mutableIntStateOf(-1) }
-    val firstInteractive = listSections.indexOfFirst { it.type != SectionType.HERO }
+    val firstInteractive = sections.indexOfFirst { it.type != SectionType.HERO }
     val firstCard = remember { FocusRequester() }
-    val heroVisible = focusedIndex <= firstInteractive.coerceAtLeast(0)
+
+    // One scroll owner: the focused row glides to the top (the first row keeps the clock in view).
+    // The list's own bring-into-view is switched off so the two never fight.
+    LaunchedEffect(focusedIndex) {
+        if (focusedIndex < 0) return@LaunchedEffect
+        val target = if (focusedIndex <= firstInteractive) 0 else focusedIndex
+        val info = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == target }
+        if (info != null) {
+            listState.animateScrollBy(info.offset.toFloat(), tween(520, easing = Emphasized))
+        } else {
+            listState.animateScrollToItem(target)
+        }
+    }
 
     LaunchedEffect(controller.homeReset, apps.isNotEmpty()) {
         if (apps.isNotEmpty() && controller.handledHomeReset != controller.homeReset) {
@@ -106,32 +111,21 @@ fun HomeScreen(controller: LauncherController, config: LauncherConfig, apps: Lis
         }
     }
 
-    Column(Modifier.fillMaxSize()) {
-        if (heroOnTop) {
-            AnimatedVisibility(
-                visible = heroVisible,
-                enter = expandVertically(tween(480, easing = Emphasized)) + fadeIn(tween(480)),
-                exit = shrinkVertically(tween(480, easing = Emphasized)) + fadeOut(tween(260)),
-            ) { HeroSection(config) }
-        }
-        CompositionLocalProvider(LocalBringIntoViewSpec provides HomeScrollSpec) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .onFocusChanged { if (!it.hasFocus) focusedIndex = -1 },
-                contentPadding = PaddingValues(bottom = 200.dp),
-            ) {
-                itemsIndexed(listSections, key = { _, s -> s.id }) { index, section ->
-                    Box(Modifier.onFocusChanged { if (it.hasFocus) focusedIndex = index }) {
-                        SectionView(
-                            controller = controller,
-                            config = config,
-                            apps = apps,
-                            section = section,
-                            initialFocus = if (index == firstInteractive) firstCard else null,
-                        )
-                    }
+    CompositionLocalProvider(LocalBringIntoViewSpec provides NoScrollSpec) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 400.dp),
+        ) {
+            itemsIndexed(sections, key = { _, s -> s.id }) { index, section ->
+                Box(Modifier.onFocusChanged { if (it.hasFocus) focusedIndex = index }) {
+                    SectionView(
+                        controller = controller,
+                        config = config,
+                        apps = apps,
+                        section = section,
+                        initialFocus = if (index == firstInteractive) firstCard else null,
+                    )
                 }
             }
         }

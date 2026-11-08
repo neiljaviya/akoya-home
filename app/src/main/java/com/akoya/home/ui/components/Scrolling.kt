@@ -36,3 +36,9 @@ class EdgeScrollSpec(private val margin: Float, durationMs: Int = 400) : BringIn
 val RowScrollSpec = EdgeScrollSpec(0.08f)
 val ListScrollSpec = EdgeScrollSpec(0.16f)
 val HomeScrollSpec = PivotScrollSpec(0.11f)
+
+/** Disables automatic bring-into-view scrolling for a container that scrolls itself. */
+@OptIn(ExperimentalFoundationApi::class)
+object NoScrollSpec : BringIntoViewSpec {
+    override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float = 0f
+}
