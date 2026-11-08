@@ -74,6 +74,7 @@ fun DayProgressScene(config: LauncherConfig, p: AkoyaPalette) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         MistLayer(p)
         val h = maxHeight.value
+        val mh = maxHeight
         Column(
             Modifier
                 .fillMaxSize()
@@ -97,7 +98,7 @@ fun DayProgressScene(config: LauncherConfig, p: AkoyaPalette) {
                 }
             }
             Text(formatDate(now), style = AkoyaType.title.copy(fontSize = (h * 0.045f).sp), color = p.muted)
-            Spacer(Modifier.height(maxHeight * 0.07f))
+            Spacer(Modifier.height(mh * 0.07f))
             Text("TODAY IS ${(pct * 100).toInt()}% COMPLETE", style = AkoyaType.section.copy(fontSize = (h * 0.02f).sp), color = p.muted)
             Spacer(Modifier.height(12.dp))
             Canvas(
@@ -135,6 +136,7 @@ fun WeekScene(p: AkoyaPalette) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         MistLayer(p)
         val h = maxHeight.value
+        val mh = maxHeight
         Column(
             Modifier
                 .fillMaxSize()
@@ -149,7 +151,7 @@ fun WeekScene(p: AkoyaPalette) {
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .height(maxHeight * 0.34f),
+                    .height(mh * 0.34f),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 for (i in 0 until 7) {
