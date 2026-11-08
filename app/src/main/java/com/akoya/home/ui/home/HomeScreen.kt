@@ -198,9 +198,7 @@ private fun HeroSection(config: LauncherConfig) {
     Column(
         Modifier
             .fillMaxWidth()
-            .height(196.dp)
-            .padding(start = 56.dp, top = 8.dp),
-        verticalArrangement = Arrangement.Center,
+            .padding(start = 56.dp, top = 6.dp, bottom = 10.dp),
     ) {
         if (config.showGreeting) {
             val name = config.greetingName.takeIf { it.isNotBlank() }?.let { ", $it" } ?: ""
@@ -210,10 +208,10 @@ private fun HeroSection(config: LauncherConfig) {
             Text(formatTime(now, config.use24h, config.showSeconds), style = AkoyaType.display, color = p.text)
             val ampm = formatAmPm(now, config.use24h)
             if (ampm.isNotEmpty()) {
-                Text(ampm, style = AkoyaType.title, color = p.accent, modifier = Modifier.padding(start = 10.dp, bottom = 20.dp))
+                Text(ampm, style = AkoyaType.title, color = p.accent, modifier = Modifier.padding(start = 10.dp, bottom = 14.dp))
             }
         }
-        Text(formatDate(now), style = AkoyaType.body, color = p.muted)
+        Text(formatDate(now).uppercase(), style = AkoyaType.section, color = p.muted)
     }
 }
 
@@ -328,7 +326,7 @@ private fun ContentSection(
                     focusRequester = if (i == 0 && app == null) initialFocus else null,
                 )
             }
-            if (result != null && items.isEmpty()) {
+            if (result != null && items.isEmpty() && (app == null || result.needsPermission)) {
                 item(key = "__hint") {
                     HintCard(
                         width = width * 1.4f,

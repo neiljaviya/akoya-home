@@ -2,7 +2,10 @@ package com.akoya.home.ui.shop
 
 import android.content.Intent
 import android.net.Uri
-import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
+import com.akoya.home.R
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -45,17 +48,17 @@ private val STORE_PACKAGES = listOf(
     "com.google.android.youtube.tvmusic",
 )
 
-private data class Category(val label: String, val query: String)
+private data class Category(val label: String, val query: String, val art: Int, val darkArt: Boolean)
 
 private val CATEGORIES = listOf(
-    Category("Streaming", "streaming tv"),
-    Category("Indian TV", "hindi tv streaming"),
-    Category("Sports", "live sports"),
-    Category("Music", "music"),
-    Category("Games", "tv games"),
-    Category("Kids", "kids tv"),
-    Category("Fitness", "fitness workout tv"),
-    Category("News", "news tv"),
+    Category("Streaming", "streaming tv", R.drawable.shop_streaming, true),
+    Category("Indian TV", "hindi tv streaming", R.drawable.shop_indiantv, false),
+    Category("Sports", "live sports", R.drawable.shop_sports, false),
+    Category("Music", "music", R.drawable.shop_music, true),
+    Category("Games", "tv games", R.drawable.shop_games, false),
+    Category("Kids", "kids tv", R.drawable.shop_kids, false),
+    Category("Fitness", "fitness workout tv", R.drawable.shop_fitness, true),
+    Category("News", "news tv", R.drawable.shop_news, false),
 )
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -94,7 +97,7 @@ fun ShopScreen(controller: LauncherController, apps: List<AppInfo>) {
             Column {
             SectionHeader("Browse the Play Store")
             TvLazyRow() {
-                itemsIndexed(CATEGORIES, key = { _, c -> c.label }) { i, cat ->
+                itemsIndexed(CATEGORIES, key = { _, c -> c.label }) { _, cat ->
                     TvCard(
                         width = 190.dp,
                         height = 100.dp,
@@ -103,23 +106,17 @@ fun ShopScreen(controller: LauncherController, apps: List<AppInfo>) {
                                 Intent(Intent.ACTION_VIEW, Uri.parse("market://search?q=${Uri.encode(cat.query)}&c=apps")),
                             )
                         },
-                    ) { focused ->
-                        Box(
-                            Modifier
-                                .fillMaxSize()
-                                .background(
-                                    Brush.linearGradient(
-                                        listOf(
-                                            p.accent.copy(alpha = if (focused) 0.45f else 0.10f + (i % 3) * 0.06f),
-                                            Color.Transparent,
-                                        ),
-                                    ),
-                                ),
+                    ) {
+                        Image(
+                            painter = painterResource(cat.art),
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize(),
                         )
                         Text(
-                            cat.label,
-                            style = AkoyaType.title.copy(fontSize = AkoyaType.title.fontSize * 0.7f),
-                            color = p.text,
+                            cat.label.uppercase(),
+                            style = AkoyaType.section,
+                            color = if (cat.darkArt) Color(0xFFF1EEE8) else Color(0xFF141311),
                             modifier = Modifier
                                 .align(Alignment.BottomStart)
                                 .padding(14.dp),

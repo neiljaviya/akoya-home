@@ -94,7 +94,7 @@ val Jost = FontFamily(
 )
 
 object AkoyaType {
-    val display = TextStyle(fontFamily = Jost, fontWeight = FontWeight.ExtraLight, fontSize = 96.sp, letterSpacing = (-2).sp)
+    val display = TextStyle(fontFamily = Jost, fontWeight = FontWeight.ExtraLight, fontSize = 92.sp, lineHeight = 96.sp, letterSpacing = (-2).sp)
     val wordmark = TextStyle(fontFamily = Jost, fontWeight = FontWeight.Light, fontSize = 24.sp, letterSpacing = 0.5.sp)
     val title = TextStyle(fontFamily = Jost, fontWeight = FontWeight.Light, fontSize = 28.sp)
     val section = TextStyle(fontFamily = Jost, fontWeight = FontWeight.Medium, fontSize = 13.sp, letterSpacing = 3.4.sp)

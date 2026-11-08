@@ -6,6 +6,9 @@ import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.delay
 import com.akoya.home.ui.components.ListScrollSpec
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -79,17 +82,24 @@ fun SettingsScreen(controller: LauncherController, config: LauncherConfig, apps:
     var editingName by remember { mutableStateOf(false) }
     var confirmReset by remember { mutableStateOf(false) }
     var editingBrand by remember { mutableStateOf(false) }
+    var showTakeoverHelp by remember { mutableStateOf(false) }
+    val tabFocus = remember { SettingsTab.entries.associateWith { FocusRequester() } }
+    LaunchedEffect(Unit) {
+        delay(120)
+        runCatching { tabFocus[tab]?.requestFocus() }
+    }
 
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier
                 .padding(start = 56.dp, end = 56.dp, top = 16.dp, bottom = 4.dp)
-                .focusRestorer()
+                // Entering the tab strip always lands on the open tab, never the nearest one.
+                .focusRestorer { tabFocus[tab] ?: FocusRequester.Default }
                 .focusGroup(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Text("Akoya settings", style = AkoyaType.title, color = p.text)
+            Text("Settings", style = AkoyaType.title, color = p.text)
             Spacer(Modifier.width(20.dp))
             SettingsTab.entries.forEach { t ->
                 TvButton(
@@ -98,6 +108,7 @@ fun SettingsScreen(controller: LauncherController, config: LauncherConfig, apps:
                     compact = true,
                     onFocus = { if (it) tab = t },
                     onClick = { tab = t },
+                    focusRequester = tabFocus[t],
                 )
             }
         }
@@ -117,7 +128,7 @@ fun SettingsScreen(controller: LauncherController, config: LauncherConfig, apps:
                 SettingsTab.CLOCK -> clock(controller, config, onEditName = { editingName = true })
                 SettingsTab.SCREENSAVER -> screensaver(controller, config)
                 SettingsTab.APPS -> appsTab(controller, config, apps)
-                SettingsTab.SETUP -> setup(controller, onReset = { confirmReset = true })
+                SettingsTab.SETUP -> setup(controller, onReset = { confirmReset = true }, onTakeover = { showTakeoverHelp = true })
             }
         }
         }
@@ -226,6 +237,21 @@ fun SettingsScreen(controller: LauncherController, config: LauncherConfig, apps:
             initial = config.greetingName,
             onDone = { name -> store.update { it.copy(greetingName = name) } },
             onDismiss = { editingName = false },
+        )
+    }
+
+    if (showTakeoverHelp) {
+        OptionsDialog(
+            title = "Home button takeover",
+            subtitle = "Turn on \"Akoya Home – Home button\" in TV Settings → System → Accessibility.\n" +
+                "If the TV says \"No application can handle this action\" or the entry isn't listed, this TV has " +
+                "locked its Accessibility menu. Then one command from a computer or Android phone does it instead:\n" +
+                "adb shell cmd package set-home-activity $PKG/.MainActivity",
+            onDismiss = { showTakeoverHelp = false },
+            options = listOf(
+                DialogOption("Open TV Accessibility settings") { controller.openAccessibility() },
+                DialogOption("Close") {},
+            ),
         )
     }
 
@@ -437,7 +463,7 @@ private fun LazyListScope.appsTab(controller: LauncherController, config: Launch
     }
 }
 
-private fun LazyListScope.setup(controller: LauncherController, onReset: () -> Unit) {
+private fun LazyListScope.setup(controller: LauncherController, onReset: () -> Unit, onTakeover: () -> Unit) {
     item {
         val isDefault = remember(controller.refreshTick) { controller.apps.isDefaultLauncher() }
         SettingRow(
@@ -455,7 +481,7 @@ private fun LazyListScope.setup(controller: LauncherController, onReset: () -> U
             value = if (on) "On" else "Off",
             subtitle = if (on) "Pressing Home always lands on Akoya." else
                 "TV Settings → System → Accessibility → scroll to \"Akoya Home – Home button\" → On",
-            onClick = { controller.openAccessibility() },
+            onClick = onTakeover,
         )
     }
     item {
