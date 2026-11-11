@@ -21,7 +21,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-enum class Tab(val label: String) { HOME("Home"), APPS("Apps"), FILES("Files"), SHOP("Shop"), SETTINGS("Settings") }
+enum class Tab(val label: String) { HOME("Home"), LIVE("Live TV"), APPS("Apps"), FILES("Files"), SHOP("Shop"), SETTINGS("Settings") }
 
 /** UI state + actions shared by every screen. Lives as long as the launcher activity. */
 class LauncherController(val context: Context) {

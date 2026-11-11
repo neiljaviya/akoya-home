@@ -148,6 +148,7 @@ private fun SectionView(
     when (section.type) {
         SectionType.HERO -> HeroSection(config)
         SectionType.QUICK_APPS -> QuickAppsSection(controller, config, visibleApps, section, initialFocus)
+        SectionType.LIVE_TV -> com.akoya.home.livetv.LiveTvHomeSection(section.title, scale, initialFocus)
         SectionType.CONTINUE_WATCHING -> {
             val result by produceState<ContentResult?>(null, controller.refreshTick) {
                 value = controller.content.watchNext()

@@ -8,6 +8,7 @@ It's built with Kotlin and Jetpack Compose. It needs Android 9 or newer and work
 | Area | What you get |
 |---|---|
 | **Home** | Home is made of sections you choose and arrange: a clock and greeting, Quick apps, Continue watching, an app spotlight (for example Netflix or YouTube covers), Recent apps, an all-apps row, HDMI inputs, and shortcuts |
+| **Live TV** | An IPTV player in the same style. Add free public channel lists (India, USA), any M3U playlist link, or an Xtream login. Channels from every playlist appear together, grouped by playlist and category. Favourites you can reorder, and it reopens on the last channel you watched |
 | **Apps** | A grid of every app, sorted A–Z or newest first. You can hide or unhide apps. Hold OK on an app for options |
 | **Shop** | Play Store, Google TV and Play Games tiles, Play Store category shortcuts, and picks from Google TV when available |
 | **Settings** (the ⚙ in the top bar) | **Appearance**: six themes (Midnight Pearl, Pearl, Sumi & Gold, Zen Garden, Lotus, Harbour Blue), the background (zen pattern, gradient, your own image or solid colour), image dimming, focus zoom, app names, animations and your own logo<br>**Home layout editor**: add, move, resize, rename, hide or remove sections<br>**Clock**: 12- or 24-hour, seconds, greeting and name<br>**Screensaver**: style (ambient pearl, floating clock or photo slideshow), idle time, photo duration and a preview<br>**Apps**: hidden apps and resetting Quick apps<br>**Setup & backup**: status of the permissions, backing up and restoring settings, and a full reset |
@@ -75,6 +76,28 @@ adb shell pm enable com.google.android.apps.tv.launcherx
 Turning it off removes Google TV's own home rows and profile switcher. Search and voice (Assistant), apps, casting and Settings keep working.
 A Google system update can turn the launcher back on. If that happens, run the disable command again.
 
+## Live TV
+
+Open the **Live TV** tab. The first time, it asks for a channel source:
+
+- **India (free)** and **USA (free)** add the public channel lists kept by the iptv-org project. Some of those links go dead; the list updates itself once a day.
+- **Playlist link** takes the M3U link from a provider. **Xtream login** takes a server address, username and password.
+- Typing long links with the remote is slow. Use the phone page instead: **TV → Live TV playlists**.
+
+While watching:
+
+| Remote | What it does |
+|---|---|
+| **Up / Down** (or CH−/CH+) | Previous / next channel in the current list |
+| **OK** or **Left** | Channel list. Groups on the left, channels on the right |
+| **Hold OK** on a channel (or **Menu**) | Add to favourites, or move it up or down in favourites |
+| **Right** | Show the channel banner |
+| **Back** | Close the list, or leave Live TV |
+
+To show favourite channels on Home, add the **Live TV** section in Settings → Home layout.
+
+Logins are stored only on the TV, in the app's private storage. They are not included in the settings backup.
+
 ## Personalising with files
 
 Put files in these folders with `adb push` (no extra permissions needed):
@@ -112,4 +135,10 @@ app/src/main/java/com/akoya/home/
   ui/components/             TV focus cards, buttons, dialogs, backdrop, clock helpers
   ui/theme/Theme.kt          Akoya palettes and typography
   dream/AkoyaDreamService.kt system screensaver
+  livetv/LiveTvStore.kt      playlists, cached channels, favourites, last channel
+  livetv/M3u.kt              M3U playlist parser (unit-tested in app/src/test)
+  livetv/LivePlayer.kt       Media3 player with HLS / MPEG-TS fallback and retries
+  livetv/LiveTvActivity.kt   full-screen player; LiveTvScreen.kt is the channel list and banner
+  livetv/PlaylistsScreen.kt  add, refresh, switch off and remove playlists
+  livetv/LiveTvLauncher.kt   the Live TV tab and the Home section
 ```

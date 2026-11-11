@@ -45,6 +45,7 @@
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:requestLegacyExternalStorage="true"
+        android:usesCleartextTraffic="true"
         android:theme="@style/Theme.AkoyaHome">
 
         <activity
@@ -68,6 +69,17 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Live TV player. Opened from the launcher's Live TV tab; many channel streams are plain http. -->
+        <activity
+            android:name=".livetv.LiveTvActivity"
+            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|smallestScreenSize|uiMode|density|fontScale"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:resizeableActivity="false"
+            android:screenOrientation="landscape"
+            android:windowSoftInputMode="adjustNothing" />
 
         <service
             android:name=".dream.AkoyaDreamService"

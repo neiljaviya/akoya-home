@@ -166,6 +166,29 @@ nav button.on{color:var(--kumo)}
     <div class="row" style="margin-top:14px"><span class="muted grow" id="tmdbState"></span><button class="danger" id="tmdbClear">Remove</button><button id="tmdbSave">Save</button></div>
   </div>
   <div class="card">
+    <div class="eyebrow">Live TV playlists</div>
+    <p class="muted">Channel sources for the Live TV tab. Paste the link or login from your provider, or add a free public list.</p>
+    <div id="liveList"></div>
+    <div class="row" id="livePresets" style="margin-top:12px"></div>
+    <label>Type</label>
+    <div class="seg" id="liveSeg"><button data-v="link" class="on">Playlist link</button><button data-v="xtream">Xtream login</button></div>
+    <div id="liveLink">
+      <label>M3U link</label>
+      <input id="liveUrl" placeholder="http://…" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </div>
+    <div id="liveXtream" class="hidden">
+      <label>Server</label>
+      <input id="liveServer" placeholder="http://host:port" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <label>Username</label>
+      <input id="liveUser" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <label>Password</label>
+      <input id="livePass" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </div>
+    <label>Name (optional)</label>
+    <input id="liveName" placeholder="e.g. My provider" autocomplete="off">
+    <div class="row" style="margin-top:14px"><span class="muted grow" id="liveState"></span><button id="liveAdd">Add playlist</button></div>
+  </div>
+  <div class="card">
     <div class="eyebrow">This phone</div>
     <p class="muted">Signed in with PIN. <a href="#" id="forget" style="color:var(--sand)">Forget PIN</a></p>
   </div>
@@ -221,7 +244,7 @@ function showTab(t) {
   localStorage.setItem('tvtab', t);
   $$('nav button').forEach(b => b.classList.toggle('on', b.dataset.t === t));
   $$('section[id^=tab-]').forEach(s => s.classList.toggle('hidden', s.id !== 'tab-' + t));
-  if (t === 'photos') loadLib(); if (t === 'files') loadRoots();
+  if (t === 'photos') loadLib(); if (t === 'files') loadRoots(); if (t === 'tv') loadLive();
 }
 $$('nav button').forEach(b => b.onclick = () => showTab(b.dataset.t));
 
@@ -405,6 +428,34 @@ $('#tmdbSave').onclick = async () => {
   if (ok && key) { $('#tmdbKey').value = ''; STATUS.tmdb = true; }
 };
 $('#tmdbClear').onclick = async () => { if (await saveSettings({ tmdbKey: '' }, 'Key removed')) { STATUS.tmdb = false; $('#tmdbState').textContent = 'No key yet'; } };
+
+// ------------------------------------------------------------ Live TV playlists
+let liveKind = 'link', liveTimer = null;
+const esc = (t) => String(t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+seg('#liveSeg', v => { liveKind = v; $('#liveLink').classList.toggle('hidden', v !== 'link'); $('#liveXtream').classList.toggle('hidden', v !== 'xtream'); });
+function renderLive(d) {
+  $('#liveList').innerHTML = d.playlists.length ? d.playlists.map(p => `<div class="file"><div class="ic">${p.enabled ? '▶' : '⏸'}</div><div class="nm">${esc(p.name)}<div class="sz">${p.loading ? 'Downloading channels…' : p.error ? esc(p.error) : p.channels + ' channels' + (p.kind === 'XTREAM' ? ' · Xtream' : '') + (p.host ? ' · ' + esc(p.host) : '')}</div></div><button class="ghost" data-lr="${p.id}">↻</button><button class="ghost" data-lt="${p.id}">${p.enabled ? 'Off' : 'On'}</button><button class="danger" data-ld="${p.id}">✕</button></div>`).join('') : '<p class="muted">No playlists yet.</p>';
+  $('#livePresets').innerHTML = d.presets.map(p => `<button class="ghost" data-lp="${p.id}">+ ${esc(p.name)}</button>`).join('');
+  const act = (sel, attr, fn) => $$(sel).forEach(b => b.onclick = async () => { try { renderLive(await fn(b.dataset[attr])); } catch (e) { toast(e.message); } });
+  act('#liveList [data-lr]', 'lr', id => api('/livetv/refresh?' + q({ id }), { method: 'POST' }));
+  act('#liveList [data-lt]', 'lt', id => api('/livetv/toggle?' + q({ id }), { method: 'POST' }));
+  act('#liveList [data-ld]', 'ld', id => { if (!confirm('Remove this playlist from the TV?')) return api('/livetv'); return api('/livetv/remove?' + q({ id }), { method: 'POST' }); });
+  act('#livePresets [data-lp]', 'lp', id => api('/livetv/add', { method: 'POST', body: JSON.stringify({ preset: id }) }));
+  clearTimeout(liveTimer);
+  if (d.playlists.some(p => p.loading)) liveTimer = setTimeout(loadLive, 2000);
+}
+async function loadLive() { try { renderLive(await api('/livetv')); } catch (e) { if (e.message !== 'PIN') $('#liveState').textContent = e.message; } }
+$('#liveAdd').onclick = async () => {
+  const body = liveKind === 'link'
+    ? { name: $('#liveName').value, url: $('#liveUrl').value.trim() }
+    : { name: $('#liveName').value, server: $('#liveServer').value.trim(), username: $('#liveUser').value.trim(), password: $('#livePass').value.trim() };
+  if (liveKind === 'link' ? !body.url : !(body.server && body.username && body.password)) { toast('Fill in the ' + (liveKind === 'link' ? 'link' : 'server, username and password')); return; }
+  try {
+    renderLive(await api('/livetv/add', { method: 'POST', body: JSON.stringify(body) }));
+    ['#liveUrl', '#liveServer', '#liveUser', '#livePass', '#liveName'].forEach(i => $(i).value = '');
+    toast('Added. Channels are downloading on the TV');
+  } catch (e) { toast(e.message); }
+};
 
 if (PIN) boot(); else showGate();
 })();

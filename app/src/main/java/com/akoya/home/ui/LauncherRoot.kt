@@ -83,6 +83,7 @@ fun LauncherRoot(controller: LauncherController) {
                     ) { tab ->
                         when (tab) {
                             Tab.HOME -> HomeScreen(controller, config, apps)
+                            Tab.LIVE -> com.akoya.home.livetv.LiveTvTab()
                             Tab.APPS -> AppsScreen(controller, config, apps)
                             Tab.FILES -> com.akoya.home.ui.files.FilesScreen(controller)
                             Tab.SHOP -> ShopScreen(controller, apps)

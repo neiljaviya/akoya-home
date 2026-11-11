@@ -93,7 +93,7 @@ fun TopBar(controller: LauncherController, config: LauncherConfig, navFocus: Map
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
         TvButton(text = "Search", icon = Icons.Filled.Search, onClick = { controller.openSearch() })
-        for (tab in listOf(Tab.HOME, Tab.APPS, Tab.FILES, Tab.SHOP)) {
+        for (tab in listOf(Tab.HOME, Tab.LIVE, Tab.APPS, Tab.FILES, Tab.SHOP)) {
             TvButton(
                 text = tab.label,
                 selected = controller.tab == tab,

@@ -13,6 +13,7 @@ import java.util.UUID
 enum class SectionType(val label: String, val description: String) {
     HERO("Clock & greeting", "Large clock, date and greeting"),
     QUICK_APPS("Quick apps", "Your favourite apps, in your order"),
+    LIVE_TV("Live TV", "Favourite channels and a shortcut to live TV"),
     CONTINUE_WATCHING("Continue watching", "Resume shows and movies from your apps"),
     APP_CONTENT("App spotlight", "Covers and picks from one app, e.g. Netflix"),
     RECENT_APPS("Recent apps", "Apps you opened lately"),
