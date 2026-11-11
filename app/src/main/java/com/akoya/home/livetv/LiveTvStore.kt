@@ -8,6 +8,9 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,6 +28,18 @@ import java.net.URLEncoder
 import java.util.UUID
 
 enum class PlaylistKind { M3U, XTREAM }
+
+/** A provider account that offers the Xtream API (films, series, guide) alongside live channels. */
+class XtreamAccount(val playlistId: String, val name: String, val base: String, val user: String, val pass: String) {
+    private val u = URLEncoder.encode(user, "UTF-8")
+    private val p = URLEncoder.encode(pass, "UTF-8")
+    fun api(action: String) = "$base/player_api.php?username=$u&password=$p&action=$action"
+    fun movieUrl(id: String, ext: String) = "$base/movie/$u/$p/$id.${ext.ifBlank { "mp4" }}"
+    fun episodeUrl(id: String, ext: String) = "$base/series/$u/$p/$id.${ext.ifBlank { "mp4" }}"
+}
+
+/** Progress of a channel health check. */
+data class HealthRun(val label: String, val done: Int, val total: Int, val bad: Int, val running: Boolean)
 
 /**
  * A channel source. For [PlaylistKind.M3U], [url] is the playlist link.
@@ -98,7 +113,23 @@ data class LiveTvState(
     val failing: Map<String, Int> = emptyMap(),
     /** Switch the screen's refresh rate to suit each channel (25 fps on 50 Hz, and so on). */
     val autoFrameRate: Boolean = true,
+    // ---- channel management
+    val renames: Map<String, String> = emptyMap(),
+    val hiddenChannels: Set<String> = emptySet(),
+    val hiddenGroups: Set<String> = emptySet(),
+    val groupNames: Map<String, String> = emptyMap(),
+    val categories: List<Category> = emptyList(),
+    val sortAz: Boolean = false,
+    /** Leave channels that failed twice running out of the lists altogether. */
+    val hideOffAir: Boolean = false,
+    /** Highest picture height to play (0 = whatever the connection manages). */
+    val maxHeight: Int = 0,
 ) {
+    fun prefs(): ChannelPrefs = ChannelPrefs(
+        renames, hiddenChannels, hiddenGroups, groupNames, categories, sortAz,
+        offAir = if (hideOffAir) failing.filterValues { it >= 2 }.keys else emptySet(),
+    )
+
     /** Failed twice running: dimmed in the list and skipped when zapping. */
     fun isOffAir(channelId: String) = (failing[channelId] ?: 0) >= 2
 }
@@ -356,6 +387,177 @@ class LiveTvStore private constructor(private val context: Context) {
         }
     }
 
+    /**
+     * Logins that can also list films and series. An Xtream login can; so can an M3U link of
+     * the usual "get.php?username=…&password=…" kind, which is the same account underneath.
+     */
+    fun xtreamAccounts(): List<XtreamAccount> = current.playlists.filter { it.enabled }.mapNotNull { p ->
+        when {
+            p.kind == PlaylistKind.XTREAM -> XtreamAccount(p.id, p.name, p.url, p.username, p.password)
+            "username=" in p.url && "password=" in p.url -> runCatching {
+                val u = Uri.parse(p.url)
+                val user = u.getQueryParameter("username").orEmpty()
+                val pass = u.getQueryParameter("password").orEmpty()
+                if (user.isBlank() || pass.isBlank() || u.host.isNullOrBlank()) null
+                else XtreamAccount(p.id, p.name, u.scheme + "://" + u.host + (if (u.port > 0) ":" + u.port else ""), user, pass)
+            }.getOrNull()
+            else -> null
+        }
+    }
+
+    // ------------------------------------------------------------------ channel management
+
+    /** Rearranges the channel list after a management change (off the main thread). */
+    private fun rearrange() { scope.launch { publish() } }
+
+    private fun manage(transform: (LiveTvState) -> LiveTvState) { updateState(transform); rearrange() }
+
+    /** A blank name puts the provider's name back. */
+    fun renameChannel(id: String, name: String) = manage {
+        val n = name.trim()
+        it.copy(renames = if (n.isEmpty()) it.renames - id else it.renames + (id to n.take(80)))
+    }
+
+    fun hideChannel(id: String) = manage { s ->
+        s.copy(hiddenChannels = s.hiddenChannels + id, favorites = s.favorites - id, categories = s.categories.map { c -> c.copy(channels = c.channels - id) })
+    }
+
+    fun showAllChannels() = manage { it.copy(hiddenChannels = emptySet()) }
+
+    fun setGroupsHidden(keys: Collection<String>, hidden: Boolean) = manage {
+        it.copy(hiddenGroups = if (hidden) it.hiddenGroups + keys else it.hiddenGroups - keys.toSet())
+    }
+
+    fun renameGroup(key: String, name: String) = manage {
+        val n = name.trim()
+        if (key.startsWith("c:")) it.copy(categories = it.categories.map { c -> if ("c:" + c.id == key && n.isNotEmpty()) c.copy(name = n.take(40)) else c })
+        else it.copy(groupNames = if (n.isEmpty()) it.groupNames - key else it.groupNames + (key to n.take(40)))
+    }
+
+    /** Makes a category and returns its group key. */
+    fun addCategory(name: String, firstChannel: String? = null): String {
+        val cat = Category(UUID.randomUUID().toString().take(8), name.trim().take(40).ifBlank { "My channels" }, listOfNotNull(firstChannel))
+        manage { it.copy(categories = it.categories + cat) }
+        return "c:" + cat.id
+    }
+
+    fun deleteCategory(key: String) = manage { it.copy(categories = it.categories.filterNot { c -> "c:" + c.id == key }) }
+
+    fun moveCategory(key: String, delta: Int) = manage {
+        val list = it.categories.toMutableList()
+        val i = list.indexOfFirst { c -> "c:" + c.id == key }
+        val j = i + delta
+        if (i < 0 || j !in list.indices) return@manage it
+        val c = list.removeAt(i); list.add(j, c)
+        it.copy(categories = list)
+    }
+
+    fun setInCategory(key: String, channelId: String, member: Boolean) = manage {
+        it.copy(categories = it.categories.map { c ->
+            when {
+                "c:" + c.id != key -> c
+                member -> if (channelId in c.channels) c else c.copy(channels = c.channels + channelId)
+                else -> c.copy(channels = c.channels - channelId)
+            }
+        })
+    }
+
+    fun moveInCategory(key: String, channelId: String, delta: Int) = manage {
+        it.copy(categories = it.categories.map { c ->
+            if ("c:" + c.id != key) return@map c
+            val list = c.channels.toMutableList()
+            val i = list.indexOf(channelId)
+            val j = i + delta
+            if (i < 0 || j !in list.indices) return@map c
+            list.removeAt(i); list.add(j, channelId)
+            c.copy(channels = list)
+        })
+    }
+
+    fun setSortAz(on: Boolean) = manage { it.copy(sortAz = on) }
+    fun setHideOffAir(on: Boolean) = manage { it.copy(hideOffAir = on) }
+    fun setMaxHeight(h: Int) = updateState { it.copy(maxHeight = h) }
+
+    // ------------------------------------------------------------------ channel health check
+
+    /** Progress of a "which channels work?" run; null when none has been started. */
+    private val _health = MutableStateFlow<HealthRun?>(null)
+    val health: StateFlow<HealthRun?> = _health.asStateFlow()
+    private var healthJob: kotlinx.coroutines.Job? = null
+
+    /** A playlist that comes from a paid login usually allows one connection at a time. */
+    fun isSingleConnection(playlistId: String): Boolean {
+        val p = current.playlists.firstOrNull { it.id == playlistId } ?: return false
+        return p.kind == PlaylistKind.XTREAM || "username=" in p.url
+    }
+
+    /**
+     * Tries each channel's link and marks the ones that don't answer as not working.
+     * [gentle] checks one at a time with a pause (for providers that allow one connection);
+     * otherwise four are checked at once.
+     */
+    fun checkChannels(label: String, channels: List<Channel>, gentle: Boolean) {
+        healthJob?.cancel()
+        if (channels.isEmpty()) return
+        _health.value = HealthRun(label, 0, channels.size, 0, running = true)
+        healthJob = scope.launch {
+            val results = HashMap<String, Boolean>()
+            var done = 0
+            var bad = 0
+            fun flush() {
+                if (results.isEmpty()) return
+                val batch = HashMap(results); results.clear()
+                updateState { s ->
+                    val f = s.failing.toMutableMap()
+                    for ((id, ok) in batch) if (ok) f.remove(id) else f[id] = maxOf(f[id] ?: 0, 2)
+                    s.copy(failing = f)
+                }
+            }
+            try {
+                for (chunk in channels.chunked(if (gentle) 1 else 4)) {
+                    val answers = chunk.map { ch -> async { ch.id to probe(ch) } }.awaitAll()
+                    for ((id, ok) in answers) { results[id] = ok; done++; if (!ok) bad++ }
+                    _health.value = HealthRun(label, done, channels.size, bad, running = true)
+                    if (results.size >= 24) flush()
+                    if (gentle) delay(150)
+                }
+            } finally {
+                flush()
+                _health.value = HealthRun(label, done, channels.size, bad, running = false)
+                if (current.hideOffAir) publish()
+            }
+        }
+    }
+
+    fun stopCheck() { healthJob?.cancel() }
+
+    /** Forgets every "not working" mark (for instance after the provider fixed an outage). */
+    fun clearOffAir() = manage { it.copy(failing = emptyMap()) }
+
+    /** True when the link answers and sends at least a little data. */
+    private fun probe(ch: Channel): Boolean = runCatching {
+        var next = ch.url
+        repeat(5) {
+            val c = URL(next).openConnection() as HttpURLConnection
+            try {
+                c.connectTimeout = 6_000
+                c.readTimeout = 7_000
+                c.instanceFollowRedirects = false
+                c.setRequestProperty("User-Agent", ch.userAgent.ifBlank { PLAYLIST_AGENT })
+                if (ch.referrer.isNotBlank()) c.setRequestProperty("Referer", ch.referrer)
+                val code = c.responseCode
+                when {
+                    code in 300..399 -> next = URL(URL(next), c.getHeaderField("Location") ?: return@runCatching false).toString()
+                    code in 200..299 -> return@runCatching c.inputStream.use { it.read(ByteArray(512)) > 0 }
+                    else -> return@runCatching false
+                }
+            } finally {
+                c.disconnect()
+            }
+        }
+        false
+    }.getOrDefault(false)
+
     /** The clock a channel's provider keeps, for catch-up links that use server time. */
     fun zoneFor(ch: Channel): java.time.ZoneId {
         val tz = current.playlists.firstOrNull { it.id == ch.playlistId }?.timezone.orEmpty()
@@ -374,7 +576,7 @@ class LiveTvStore private constructor(private val context: Context) {
     private fun publish() {
         val order = current.playlists.filter { it.enabled }.map { it.id }
         val merged = synchronized(lock) { order.flatMap { byPlaylist[it].orEmpty() } }
-        _index.value = ChannelIndex(merged, current.playlists)
+        _index.value = ChannelIndex(merged, current.playlists, current.prefs())
         _channels.value = merged
     }
 
@@ -394,6 +596,18 @@ class LiveTvStore private constructor(private val context: Context) {
                 favorites = (0 until (favs?.length() ?: 0)).mapNotNull { i -> favs?.optString(i)?.ifBlank { null } },
                 lastChannelId = o.optString("lastChannelId").ifBlank { null },
                 autoFrameRate = o.optBoolean("autoFrameRate", true),
+                renames = o.optJSONObject("renames").toStringMap(),
+                hiddenChannels = o.optJSONArray("hiddenChannels").toStringSet(),
+                hiddenGroups = o.optJSONArray("hiddenGroups").toStringSet(),
+                groupNames = o.optJSONObject("groupNames").toStringMap(),
+                categories = o.optJSONArray("categories")?.let { arr ->
+                    (0 until arr.length()).mapNotNull { i ->
+                        arr.optJSONObject(i)?.let { c -> Category(c.optString("id"), c.optString("name"), c.optJSONArray("channels").toStringSet().toList()) }
+                    }.filter { it.id.isNotBlank() }
+                }.orEmpty(),
+                sortAz = o.optBoolean("sortAz", false),
+                hideOffAir = o.optBoolean("hideOffAir", false),
+                maxHeight = o.optInt("maxHeight", 0),
                 failing = o.optJSONObject("failing")?.let { f -> f.keys().asSequence().associateWith { k -> f.optInt(k) } }.orEmpty(),
             )
         }.getOrDefault(LiveTvState())
@@ -404,6 +618,16 @@ class LiveTvStore private constructor(private val context: Context) {
         .put("favorites", JSONArray(s.favorites))
         .put("lastChannelId", s.lastChannelId ?: "")
         .put("autoFrameRate", s.autoFrameRate)
+        .put("renames", JSONObject(s.renames))
+        .put("hiddenChannels", JSONArray(s.hiddenChannels.toList()))
+        .put("hiddenGroups", JSONArray(s.hiddenGroups.toList()))
+        .put("groupNames", JSONObject(s.groupNames))
+        .put("categories", JSONArray().also { arr ->
+            s.categories.forEach { c -> arr.put(JSONObject().put("id", c.id).put("name", c.name).put("channels", JSONArray(c.channels))) }
+        })
+        .put("sortAz", s.sortAz)
+        .put("hideOffAir", s.hideOffAir)
+        .put("maxHeight", s.maxHeight)
         .put("failing", JSONObject().also { o -> s.failing.forEach { (k, v) -> o.put(k, v) } })
 
     private fun downloadM3u(p: Playlist): ParsedPlaylist =
@@ -502,6 +726,20 @@ class LiveTvStore private constructor(private val context: Context) {
                 r.endArray()
             }
         }
+        return out
+    }
+
+    private fun JSONObject?.toStringMap(): Map<String, String> {
+        if (this == null) return emptyMap()
+        val out = HashMap<String, String>()
+        for (k in keys()) optString(k).takeIf { it.isNotBlank() }?.let { out[k] = it }
+        return out
+    }
+
+    private fun JSONArray?.toStringSet(): Set<String> {
+        if (this == null) return emptySet()
+        val out = LinkedHashSet<String>()
+        for (i in 0 until length()) optString(i).takeIf { it.isNotBlank() }?.let { out += it }
         return out
     }
 

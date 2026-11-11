@@ -10,53 +10,114 @@ data class GroupEntry(
     val count: Int,
     /** True for a whole playlist (shown as a heading you can still select). */
     val isPlaylist: Boolean = false,
+    /** A category the user made. */
+    val isCustom: Boolean = false,
+    val hidden: Boolean = false,
+)
+
+/** A category the user made: its own name and its own channel order. */
+data class Category(val id: String, val name: String, val channels: List<String> = emptyList())
+
+/** The user's channel management choices, applied when the channel list is arranged. */
+data class ChannelPrefs(
+    val renames: Map<String, String> = emptyMap(),
+    val hiddenChannels: Set<String> = emptySet(),
+    val hiddenGroups: Set<String> = emptySet(),
+    val groupNames: Map<String, String> = emptyMap(),
+    val categories: List<Category> = emptyList(),
+    val sortAz: Boolean = false,
+    /** Channels to leave out because they don't work (only filled when the user asked for that). */
+    val offAir: Set<String> = emptySet(),
 )
 
 /**
- * Channels arranged for the channel list: by playlist, then by the playlist's own groups.
- * Built once per playlist change, off the main thread, and shared by the launcher and the player.
+ * Channels arranged for the channel list: the user's categories, then each playlist and its
+ * own groups, with renames, hidden channels and hidden groups applied.
+ * Built once per change, off the main thread, and shared by the launcher and the player.
  */
-class ChannelIndex(val all: List<Channel>, playlists: List<Playlist>) {
+class ChannelIndex(raw: List<Channel>, playlists: List<Playlist>, prefs: ChannelPrefs = ChannelPrefs()) {
+    /** Every channel that is shown, in list order. */
+    val all: List<Channel>
     val byId: Map<String, Channel>
     val numberOf: Map<String, Int>
+    /** Groups shown in the channel list. */
     val groups: List<GroupEntry>
+    /** Every playlist group, including hidden ones, for the "manage groups" screen. */
+    val allGroups: List<GroupEntry>
     val hasPlaylistRows: Boolean
+    val hiddenChannelCount: Int
     private val byKey = HashMap<String, List<Channel>>()
     private val sameChannel = HashMap<String, MutableList<Channel>>()
 
     init {
-        val ids = HashMap<String, Channel>(all.size * 2)
-        val numbers = HashMap<String, Int>(all.size * 2)
-        val perPlaylist = LinkedHashMap<String, MutableList<Channel>>()
-        all.forEachIndexed { i, c ->
+        val shown = ArrayList<Channel>(raw.size)
+        val perPlaylist = LinkedHashMap<String, LinkedHashMap<String, MutableList<Channel>>>()
+        val hiddenGroupSizes = HashMap<String, Int>()
+        var hiddenChannels = 0
+        for (c0 in raw) {
+            if (c0.id in prefs.hiddenChannels) { hiddenChannels++; continue }
+            if (c0.id in prefs.offAir) continue
+            val groupKey = c0.playlistId + "/" + c0.group
+            val groupsOfPlaylist = perPlaylist.getOrPut(c0.playlistId) { LinkedHashMap() }
+            if (groupKey in prefs.hiddenGroups) {
+                hiddenGroupSizes[groupKey] = (hiddenGroupSizes[groupKey] ?: 0) + 1
+                groupsOfPlaylist.getOrPut(c0.group) { ArrayList(0) }
+                continue
+            }
+            val c = prefs.renames[c0.id]?.let { c0.copy(name = it) } ?: c0
+            groupsOfPlaylist.getOrPut(c.group) { ArrayList() }.add(c)
+            shown += c
+        }
+        if (prefs.sortAz) {
+            shown.sortBy { it.name.lowercase() }
+            for (g in perPlaylist.values) for (list in g.values) list.sortBy { it.name.lowercase() }
+        }
+        all = shown
+        hiddenChannelCount = hiddenChannels
+
+        val ids = HashMap<String, Channel>(shown.size * 2)
+        val numbers = HashMap<String, Int>(shown.size * 2)
+        shown.forEachIndexed { i, c ->
             ids[c.id] = c
             numbers[c.id] = i + 1
-            perPlaylist.getOrPut(c.playlistId) { ArrayList() }.add(c)
             for (k in matchKeys(c)) sameChannel.getOrPut(k) { ArrayList(2) }.add(c)
         }
         byId = ids
         numberOf = numbers
 
-        val entries = ArrayList<GroupEntry>()
+        val visible = ArrayList<GroupEntry>()
+        val everything = ArrayList<GroupEntry>()
+        for (cat in prefs.categories) {
+            val key = "c:" + cat.id
+            val list = cat.channels.mapNotNull { ids[it] }
+            byKey[key] = list
+            visible += GroupEntry(key, cat.name, list.size, isCustom = true)
+        }
         val names = playlists.associate { it.id to it.name }
         val several = perPlaylist.size > 1
-        for ((pid, list) in perPlaylist) {
+        for ((pid, perGroup) in perPlaylist) {
+            val playlistName = names[pid] ?: "Playlist"
+            val whole = perGroup.values.flatten().let { if (prefs.sortAz) it.sortedBy { c -> c.name.lowercase() } else it }
             if (several) {
                 val key = "p:$pid"
-                byKey[key] = list
-                entries += GroupEntry(key, names[pid] ?: "Playlist", list.size, isPlaylist = true)
+                byKey[key] = whole
+                val entry = GroupEntry(key, playlistName, whole.size, isPlaylist = true)
+                if (whole.isNotEmpty()) visible += entry
+                everything += entry
             }
-            val perGroup = LinkedHashMap<String, MutableList<Channel>>()
-            for (c in list) perGroup.getOrPut(c.group) { ArrayList() }.add(c)
-            if (perGroup.size > 1) {
-                for ((g, sub) in perGroup) {
-                    val key = "$pid/$g"
+            for ((g, sub) in perGroup) {
+                val key = "$pid/$g"
+                val label = prefs.groupNames[key] ?: g.ifBlank { "Other" }
+                val hidden = key in prefs.hiddenGroups
+                everything += GroupEntry(key, label, if (hidden) hiddenGroupSizes[key] ?: 0 else sub.size, hidden = hidden)
+                if (!hidden && perGroup.size > 1 && sub.isNotEmpty()) {
                     byKey[key] = sub
-                    entries += GroupEntry(key, g.ifBlank { "Other" }, sub.size)
+                    visible += GroupEntry(key, label, sub.size)
                 }
             }
         }
-        groups = entries
+        groups = visible
+        allGroups = everything
         hasPlaylistRows = several
     }
 

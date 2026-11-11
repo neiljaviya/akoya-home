@@ -8,7 +8,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 
-enum class Panel { NONE, CHANNELS, GUIDE, PLAYLISTS }
+enum class Panel { NONE, CHANNELS, GUIDE, PLAYLISTS, MANAGE }
 
 /** A catch-up recording being watched: [from] is the moment the current stream began at. */
 data class ArchivePlay(val channel: Channel, val title: String, val start: Long, val stop: Long, val from: Long)
@@ -20,6 +20,16 @@ class LiveTvSession(val store: LiveTvStore, val player: LivePlayer) {
         private set
     var groupKey by mutableStateOf(GROUP_ALL)
     var optionsFor by mutableStateOf<Channel?>(null)
+
+    /** A group (by key) whose options are open. */
+    var groupOptionsFor by mutableStateOf<String?>(null)
+    var qualityOpen by mutableStateOf(false)
+
+    /** Kept up to date by the banner itself, so the remote knows whether it is showing. */
+    var bannerVisible by mutableStateOf(false)
+
+    // OK pressed while watching: [0] went down here, [1] the hold already opened the options.
+    private val ok = BooleanArray(2)
 
     /** Bumped whenever the channel banner should pop up. */
     var bannerTick by mutableIntStateOf(0)
@@ -46,6 +56,24 @@ class LiveTvSession(val store: LiveTvStore, val player: LivePlayer) {
     init {
         player.onResult = { id, played -> store.reportPlayback(id, played) }
         player.onArchiveEnded = { backToLive() }
+        player.setMaxHeight(store.current.maxHeight)
+    }
+
+    private var pausedForCheck = false
+
+    /**
+     * Starts a health check. Paid logins usually allow one connection, so for those the check
+     * goes one channel at a time and the picture is paused until it finishes.
+     */
+    fun checkChannels(label: String, channels: List<Channel>) {
+        val gentle = channels.asSequence().map { it.playlistId }.distinct().any { store.isSingleConnection(it) }
+        if (gentle && current != null) { player.stop(); pausedForCheck = true }
+        store.checkChannels(label, channels, gentle)
+    }
+
+    /** Called when a health check ends or is stopped. */
+    fun checkEnded() {
+        if (pausedForCheck) { pausedForCheck = false; if (!stopped) player.resume() }
     }
 
     fun openGuide() {
@@ -184,7 +212,7 @@ class LiveTvSession(val store: LiveTvStore, val player: LivePlayer) {
      * With a panel or dialog open the keys go to that instead.
      */
     fun handleKey(event: KeyEvent): Boolean {
-        if (panel != Panel.NONE || optionsFor != null || current == null) return false
+        if (panel != Panel.NONE || optionsFor != null || groupOptionsFor != null || qualityOpen || current == null) return false
         val first = event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0
         if (archive != null) {
             // Watching a recording: Left/Right skip, OK pauses, Back returns to live.
@@ -204,12 +232,23 @@ class LiveTvSession(val store: LiveTvStore, val player: LivePlayer) {
             }
         }
         when (event.keyCode) {
-            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_DOWN -> if (first) zap(-1)
-            KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_UP -> if (first) zap(+1)
-            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER,
-            KeyEvent.KEYCODE_DPAD_LEFT -> if (first) openChannels()
+            // Side arrows change channel.
+            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_CHANNEL_DOWN -> if (first) zap(-1)
+            KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_CHANNEL_UP -> if (first) zap(+1)
+            // Up / Down: the banner first, then the guide.
+            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> if (first) { if (bannerVisible) openGuide() else showBanner() }
+            // OK: the banner first, then the channel list. Holding OK opens the options.
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                if (event.action == KeyEvent.ACTION_DOWN) {
+                    if (event.repeatCount == 0) { ok[0] = true; ok[1] = false }
+                    else if (ok[0] && !ok[1]) { ok[1] = true; optionsFor = current }
+                } else {
+                    if (ok[0] && !ok[1]) { if (bannerVisible) openChannels() else showBanner() }
+                    ok[0] = false
+                }
+            }
             KeyEvent.KEYCODE_GUIDE -> if (first) openGuide()
-            KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_INFO -> if (first) showBanner()
+            KeyEvent.KEYCODE_INFO -> if (first) showBanner()
             KeyEvent.KEYCODE_MENU -> if (event.action == KeyEvent.ACTION_UP) optionsFor = current
             KeyEvent.KEYCODE_LAST_CHANNEL -> if (first) recall()
             else -> return false

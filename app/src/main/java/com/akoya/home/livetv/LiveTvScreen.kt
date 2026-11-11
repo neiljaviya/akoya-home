@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -113,10 +114,16 @@ fun LiveTvRoot(session: LiveTvSession, configStore: ConfigStore, onExit: () -> U
                 Panel.CHANNELS -> ChannelPanel(session, index, favorites, state)
                 Panel.GUIDE -> GuideScreen(session, index)
                 Panel.PLAYLISTS -> PlaylistsScreen(session, config, configStore, hasChannels = index.all.isNotEmpty(), onExit = onExit)
+                Panel.MANAGE -> ManageScreen(session, index, state)
                 Panel.NONE -> Unit
             }
 
-            session.optionsFor?.let { ch -> ChannelOptions(session, ch, state.favorites) }
+            session.optionsFor?.let { ch -> ChannelOptions(session, ch, state) }
+            session.groupOptionsFor?.let { key -> GroupOptions(session, index, key) }
+            if (session.qualityOpen) QualityDialog(session, state)
+
+            val health by store.health.collectAsState()
+            LaunchedEffect(health?.running) { if (health?.running == false) session.checkEnded() }
         }
     }
 }
@@ -150,7 +157,7 @@ private fun StatusOverlay(session: LiveTvSession) {
                 Text(status.message, style = AkoyaType.title, color = OnVideo)
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    if (session.archive != null) "Back to return to live TV" else "Up or Down for another channel  ·  OK for the channel list",
+                    if (session.archive != null) "Back to return to live TV" else "Left or Right for another channel  ·  OK for the channel list",
                     style = AkoyaType.body, color = OnVideoMuted,
                 )
             }
@@ -175,6 +182,7 @@ private fun ChannelBanner(session: LiveTvSession, index: ChannelIndex, playlists
     val archive = session.archive
     val guide = if (archive == null) rememberNowNext(ch) else null
     val show = session.panel == Panel.NONE && (visible || session.player.paused || session.player.status is PlayStatus.Failed)
+    LaunchedEffect(show) { session.bannerVisible = show }
     AnimatedVisibility(visible = show, enter = fadeIn(), exit = fadeOut()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomStart) {
             Row(
@@ -371,6 +379,7 @@ private fun ChannelPanel(session: LiveTvSession, index: ChannelIndex, favorites:
                         PanelRow(
                             selected = selected,
                             onClick = { session.groupKey = g.key },
+                            onLongClick = if (g.key == GROUP_FAV) null else ({ session.groupOptionsFor = g.key }),
                             onFocus = { session.groupKey = g.key; focusedGroup = i },
                             modifier = Modifier.focusRequester(if (selected) currentGroup else own),
                         ) { fg, sub ->
@@ -393,6 +402,11 @@ private fun ChannelPanel(session: LiveTvSession, index: ChannelIndex, favorites:
                     Icon(Icons.Filled.CalendarMonth, null, tint = fg, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
                     Text("TV guide", style = AkoyaType.body, color = fg)
+                }
+                PanelRow(selected = false, onClick = { session.panel = Panel.MANAGE }) { fg, _ ->
+                    Icon(Icons.Filled.Tune, null, tint = fg, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Manage channels", style = AkoyaType.body, color = fg)
                 }
                 PanelRow(selected = false, onClick = { session.panel = Panel.PLAYLISTS }) { fg, _ ->
                     Icon(Icons.Filled.PlaylistAdd, null, tint = fg, modifier = Modifier.size(18.dp))
@@ -505,27 +519,3 @@ private fun PanelRow(
     ) { content(fg, sub) }
 }
 
-@Composable
-private fun ChannelOptions(session: LiveTvSession, ch: Channel, favoriteIds: List<String>) {
-    val fav = ch.id in favoriteIds
-    val onNow = rememberNowNext(ch)?.now
-    OptionsDialog(
-        title = ch.name,
-        subtitle = ch.group.ifBlank { null },
-        onDismiss = { session.optionsFor = null },
-        options = buildList {
-            add(DialogOption(if (fav) "Remove from favourites" else "Add to favourites", if (fav) Icons.Filled.StarBorder else Icons.Filled.Star) { session.store.toggleFavorite(ch.id) })
-            if (fav && favoriteIds.size > 1) {
-                add(DialogOption("Move up in favourites", Icons.Filled.ArrowUpward, keepOpen = true) { session.store.moveFavorite(ch.id, -1) })
-                add(DialogOption("Move down in favourites", Icons.Filled.ArrowDownward, keepOpen = true) { session.store.moveFavorite(ch.id, +1) })
-            }
-            if (onNow != null && Catchup.covers(ch, onNow.start, System.currentTimeMillis())) {
-                add(DialogOption("Watch \"${onNow.title.take(28)}\" from the start", Icons.Filled.History) { session.playArchive(ch, onNow) })
-            }
-            add(DialogOption("TV guide", Icons.Filled.CalendarMonth) { session.openGuide() })
-            if (session.current?.id != ch.id) {
-                add(DialogOption("Watch", Icons.Filled.GraphicEq) { session.tune(ch, session.index.channels(session.groupKey, session.favorites)); session.panel = Panel.NONE })
-            }
-        },
-    )
-}

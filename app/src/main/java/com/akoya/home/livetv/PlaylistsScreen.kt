@@ -191,6 +191,10 @@ fun PlaylistsScreen(
                 DialogOption("Update channels and guide now", Icons.Filled.Refresh) { store.refreshAsync(pl.id) },
                 DialogOption(if (pl.guideUrl.isBlank()) "Set a guide link" else "Change the guide link", Icons.Filled.Link) { guideFor = pl },
                 DialogOption(if (pl.enabled) "Switch off" else "Switch on", if (pl.enabled) Icons.Filled.VisibilityOff else Icons.Filled.Visibility) { store.setEnabled(pl.id, !pl.enabled) },
+                DialogOption("Check which channels work", Icons.Filled.Refresh) {
+                    session.checkChannels(pl.name, session.index.channels("p:" + pl.id, emptyList()).ifEmpty { session.index.all.filter { it.playlistId == pl.id } })
+                    session.panel = Panel.MANAGE
+                },
                 DialogOption("Remove", Icons.Filled.Delete) { store.remove(pl.id) },
             ),
         )
@@ -257,11 +261,11 @@ private fun ago(time: Long): String {
     }
 }
 
-private data class Field(val label: String, val keyboard: KeyboardType = KeyboardType.Text, val initial: String = "")
+internal data class Field(val label: String, val keyboard: KeyboardType = KeyboardType.Text, val initial: String = "")
 
 /** A small form: one text box per field, Save and Cancel. */
 @Composable
-private fun FieldsDialog(
+internal fun FieldsDialog(
     title: String,
     subtitle: String,
     fields: List<Field>,

@@ -12,8 +12,8 @@ android {
         applicationId = "com.akoya.home"
         minSdk = 28
         targetSdk = 35
-        versionCode = 8
-        versionName = "1.6.0"
+        versionCode = 9
+        versionName = "1.7.0"
     }
 
     // Fixed key committed with the project so every build (Android Studio or CI)

@@ -246,3 +246,41 @@ class GuideAndCatchupTest {
         assertEquals(25f, FrameRate.fromTimestamps(times, 30))
     }
 }
+
+class ChannelManagementTest {
+    private fun ch(id: String, name: String, group: String, pl: String = "p1") =
+        Channel(id = id, playlistId = pl, name = name, url = "http://h/$id", group = group)
+
+    private val raw = listOf(ch("1", "Zed", "News"), ch("2", "Alpha", "News"), ch("3", "Kid", "Kids"), ch("4", "Film", "Movies"))
+
+    @Test
+    fun hiddenGroupsAndChannelsLeaveTheListsButStayManageable() {
+        val index = ChannelIndex(raw, emptyList(), ChannelPrefs(hiddenGroups = setOf("p1/Kids"), hiddenChannels = setOf("4")))
+        assertEquals(listOf("1", "2"), index.all.map { it.id })
+        assertEquals(listOf("News"), index.groups.map { it.label })
+        assertEquals(1, index.hiddenChannelCount)
+        val kids = index.allGroups.first { it.key == "p1/Kids" }
+        assertTrue(kids.hidden)
+        assertEquals(1, kids.count)
+        assertEquals(null, index.byId["3"])
+    }
+
+    @Test
+    fun renamesSortingAndGroupNames() {
+        val index = ChannelIndex(raw, emptyList(), ChannelPrefs(renames = mapOf("1" to "Aardvark"), sortAz = true, groupNames = mapOf("p1/News" to "Headlines")))
+        assertEquals(listOf("Aardvark", "Alpha", "Film", "Kid"), index.all.map { it.name })
+        assertEquals(1, index.numberOf["1"])
+        assertEquals("Headlines", index.label("p1/News"))
+        assertEquals(listOf("Aardvark", "Alpha"), index.channels("p1/News", emptyList()).map { it.name })
+    }
+
+    @Test
+    fun categoriesComeFirstKeepTheirOrderAndSkipOffAirChannels() {
+        val prefs = ChannelPrefs(categories = listOf(Category("a", "Evening", listOf("3", "1", "gone", "2"))), offAir = setOf("2"))
+        val index = ChannelIndex(raw, emptyList(), prefs)
+        assertEquals("c:a", index.groups.first().key)
+        assertTrue(index.groups.first().isCustom)
+        assertEquals(listOf("3", "1"), index.channels("c:a", emptyList()).map { it.id })
+        assertEquals(listOf("1", "3", "4"), index.all.map { it.id })
+    }
+}
