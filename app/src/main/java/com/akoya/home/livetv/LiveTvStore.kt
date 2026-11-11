@@ -70,7 +70,12 @@ data class LiveTvState(
     /** Channel ids, in the order the user arranged them. */
     val favorites: List<String> = emptyList(),
     val lastChannelId: String? = null,
-)
+    /** Channel id to how many times in a row it failed to play. */
+    val failing: Map<String, Int> = emptyMap(),
+) {
+    /** Failed twice running: dimmed in the list and skipped when zapping. */
+    fun isOffAir(channelId: String) = (failing[channelId] ?: 0) >= 2
+}
 
 /** Free, publicly listed channels (the iptv-org community index). */
 data class PlaylistPreset(val id: String, val name: String, val url: String)
@@ -96,6 +101,10 @@ class LiveTvStore private constructor(private val context: Context) {
     /** Every channel from every playlist that is switched on, in playlist order. */
     private val _channels = MutableStateFlow<List<Channel>>(emptyList())
     val channels: StateFlow<List<Channel>> = _channels.asStateFlow()
+
+    /** The same channels arranged for the channel list. Rebuilt off the main thread. */
+    private val _index = MutableStateFlow(ChannelIndex(emptyList(), emptyList()))
+    val index: StateFlow<ChannelIndex> = _index.asStateFlow()
 
     /** Playlist ids being downloaded right now. */
     private val _loading = MutableStateFlow<Set<String>>(emptySet())
@@ -241,6 +250,16 @@ class LiveTvStore private constructor(private val context: Context) {
         if (current.lastChannelId != channelId) updateState { it.copy(lastChannelId = channelId) }
     }
 
+    /** Remembers whether a channel played, so dead ones can be dimmed and skipped. */
+    fun reportPlayback(channelId: String, played: Boolean) {
+        val count = current.failing[channelId] ?: 0
+        if (played) {
+            if (count > 0) updateState { it.copy(failing = it.failing - channelId) }
+        } else if (count < 9) {
+            updateState { it.copy(failing = it.failing + (channelId to count + 1)) }
+        }
+    }
+
     /** Favourite channels that still exist, in the user's order. */
     fun favoriteChannels(all: List<Channel>, favorites: List<String>): List<Channel> {
         if (favorites.isEmpty()) return emptyList()
@@ -253,6 +272,7 @@ class LiveTvStore private constructor(private val context: Context) {
     private fun publish() {
         val order = current.playlists.filter { it.enabled }.map { it.id }
         val merged = synchronized(lock) { order.flatMap { byPlaylist[it].orEmpty() } }
+        _index.value = ChannelIndex(merged, current.playlists)
         _channels.value = merged
     }
 
@@ -271,6 +291,7 @@ class LiveTvStore private constructor(private val context: Context) {
                 playlists = (0 until (lists?.length() ?: 0)).mapNotNull { i -> lists?.optJSONObject(i)?.let(Playlist::fromJson) },
                 favorites = (0 until (favs?.length() ?: 0)).mapNotNull { i -> favs?.optString(i)?.ifBlank { null } },
                 lastChannelId = o.optString("lastChannelId").ifBlank { null },
+                failing = o.optJSONObject("failing")?.let { f -> f.keys().asSequence().associateWith { k -> f.optInt(k) } }.orEmpty(),
             )
         }.getOrDefault(LiveTvState())
     }
@@ -279,6 +300,7 @@ class LiveTvStore private constructor(private val context: Context) {
         .put("playlists", JSONArray().also { arr -> s.playlists.forEach { arr.put(it.toJson()) } })
         .put("favorites", JSONArray(s.favorites))
         .put("lastChannelId", s.lastChannelId ?: "")
+        .put("failing", JSONObject().also { o -> s.failing.forEach { (k, v) -> o.put(k, v) } })
 
     private fun downloadM3u(p: Playlist): List<Channel> =
         open(p.url).use { input -> input.bufferedReader().useLines { M3uParser.parse(it, p.id) } }

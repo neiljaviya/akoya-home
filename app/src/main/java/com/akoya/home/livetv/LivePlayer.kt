@@ -15,6 +15,7 @@ import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 
@@ -26,16 +27,26 @@ sealed interface PlayStatus {
 }
 
 /**
- * Plays one live channel at a time. Streams come as HLS (.m3u8) or as a raw MPEG-TS feed and
- * links don't always say which, so a stream that fails to parse is retried as the other kind.
- * Network hiccups get two quiet retries before the channel is reported as not working.
+ * Plays one live channel at a time and works through the usual ways a link goes wrong:
+ *  - links don't always say whether they are HLS or a raw MPEG-TS feed, so a stream that
+ *    fails to parse is retried as the other kind;
+ *  - a server that refuses the request is asked once more as a different player;
+ *  - a stream that connects but never shows a picture is given up on after a wait;
+ *  - when a link is dead, the channel's backup links (if any) are tried in turn.
  */
 @androidx.annotation.OptIn(UnstableApi::class)
 class LivePlayer(context: Context) {
     private val appContext = context.applicationContext
     private val handler = Handler(Looper.getMainLooper())
 
-    val exo: ExoPlayer = ExoPlayer.Builder(appContext).build()
+    // Live TV wants a quick start more than a deep buffer.
+    val exo: ExoPlayer = ExoPlayer.Builder(appContext)
+        .setLoadControl(
+            DefaultLoadControl.Builder()
+                .setBufferDurationsMs(8_000, 30_000, 1_200, 2_500)
+                .build(),
+        )
+        .build()
 
     var status by mutableStateOf<PlayStatus>(PlayStatus.Idle)
         private set
@@ -48,19 +59,49 @@ class LivePlayer(context: Context) {
     var aspect by mutableFloatStateOf(16f / 9f)
         private set
 
+    /** True when the channel's own link failed and a backup link is playing. */
+    var onBackup by mutableStateOf(false)
+        private set
+
+    /** Told once per tune whether the channel ended up playing. */
+    var onResult: ((channelId: String, played: Boolean) -> Unit)? = null
+
     private var channel: Channel? = null
+    private var links: List<Channel> = emptyList()
+    private var linkIndex = 0
     private var asHls = false
+    private var altAgent = false
     private var triedOtherKind = false
+    private var triedAltAgent = false
     private var retries = 0
+    private var reported = false
+
+    private var hadPicture = false
+
+    // No picture at all: move on. Froze after playing: it's worth reconnecting first.
+    private val watchdog = Runnable {
+        if (hadPicture) retryOrGiveUp("This channel stopped sending a picture")
+        else giveUpOnLink("This channel isn't sending a picture")
+    }
+    private val retry = Runnable { links.getOrNull(linkIndex)?.let { start(it) } }
 
     init {
         exo.playWhenReady = true
         exo.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 when (playbackState) {
-                    Player.STATE_BUFFERING -> if (status !is PlayStatus.Failed) status = PlayStatus.Loading
-                    Player.STATE_READY -> { status = PlayStatus.Playing; retries = 0 }
-                    Player.STATE_ENDED -> retryOrFail("The stream stopped")
+                    Player.STATE_BUFFERING -> {
+                        if (status !is PlayStatus.Failed) status = PlayStatus.Loading
+                        armWatchdog()
+                    }
+                    Player.STATE_READY -> {
+                        handler.removeCallbacks(watchdog)
+                        status = PlayStatus.Playing
+                        hadPicture = true
+                        retries = 0
+                        report(true)
+                    }
+                    Player.STATE_ENDED -> retryOrGiveUp("The stream stopped")
                     else -> Unit
                 }
             }
@@ -68,14 +109,11 @@ class LivePlayer(context: Context) {
             override fun onVideoSizeChanged(videoSize: VideoSize) {
                 if (videoSize.width <= 0 || videoSize.height <= 0) return
                 aspect = videoSize.width * videoSize.pixelWidthHeightRatio / videoSize.height
-                quality = when {
-                    videoSize.height >= 2000 -> "4K"
-                    else -> "${videoSize.height}p"
-                }
+                quality = if (videoSize.height >= 2000) "4K" else "${videoSize.height}p"
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                val ch = channel ?: return
+                val link = links.getOrNull(linkIndex) ?: return
                 when {
                     error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW -> {
                         exo.seekToDefaultPosition()
@@ -83,65 +121,127 @@ class LivePlayer(context: Context) {
                     }
                     !triedOtherKind && error.errorCode in FORMAT_ERRORS -> {
                         triedOtherKind = true
-                        start(ch, hls = !asHls)
+                        asHls = !asHls
+                        start(link)
                     }
-                    else -> retryOrFail(describe(error))
+                    !triedAltAgent && link.userAgent.isBlank() && error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> {
+                        triedAltAgent = true
+                        altAgent = true
+                        start(link)
+                    }
+                    // A missing or refused link won't get better by asking again.
+                    error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS ||
+                        error.errorCode == PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND -> giveUpOnLink(describe(error))
+                    else -> retryOrGiveUp(describe(error))
                 }
             }
         })
     }
 
-    fun play(ch: Channel) {
-        handler.removeCallbacksAndMessages(null)
+    /** Tunes to [ch]. [backups] are other links for the same channel, tried in order if it fails. */
+    fun play(ch: Channel, backups: List<Channel> = emptyList()) {
+        cancelPending()
         channel = ch
-        triedOtherKind = false
-        retries = 0
+        links = listOf(ch) + backups
+        linkIndex = 0
+        reported = false
         quality = ""
-        start(ch, hls = looksLikeHls(ch.url))
+        onBackup = false
+        beginLink()
     }
 
     /** Stops the stream (the TV went to another app); [resume] tunes back in. */
     fun stop() {
-        handler.removeCallbacksAndMessages(null)
+        cancelPending()
         exo.stop()
         exo.clearMediaItems()
         status = PlayStatus.Idle
     }
 
     fun resume() {
-        channel?.let { play(it) }
+        val ch = channel ?: return
+        play(ch, links.drop(1))
     }
 
     fun release() {
-        handler.removeCallbacksAndMessages(null)
+        cancelPending()
         exo.release()
     }
 
-    private fun start(ch: Channel, hls: Boolean) {
-        asHls = hls
+    private fun cancelPending() {
+        handler.removeCallbacks(watchdog)
+        handler.removeCallbacks(retry)
+    }
+
+    private fun beginLink() {
+        val link = links.getOrNull(linkIndex) ?: return
+        triedOtherKind = false
+        triedAltAgent = false
+        altAgent = false
+        hadPicture = false
+        retries = 0
+        asHls = looksLikeHls(link.url)
+        start(link)
+    }
+
+    private fun start(link: Channel) {
+        val agent = when {
+            link.userAgent.isNotBlank() -> link.userAgent
+            altAgent -> ALT_AGENT
+            else -> LiveTvStore.PLAYLIST_AGENT
+        }
         val http = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(12_000)
-            .setReadTimeoutMs(15_000)
-            .setUserAgent(ch.userAgent.ifBlank { LiveTvStore.PLAYLIST_AGENT })
-        if (ch.referrer.isNotBlank()) http.setDefaultRequestProperties(mapOf("Referer" to ch.referrer))
+            .setConnectTimeoutMs(10_000)
+            .setReadTimeoutMs(12_000)
+            .setUserAgent(agent)
+        if (link.referrer.isNotBlank()) http.setDefaultRequestProperties(mapOf("Referer" to link.referrer))
         val sources = DefaultMediaSourceFactory(DefaultDataSource.Factory(appContext, http))
-        val item = MediaItem.Builder().setUri(ch.url).apply { if (hls) setMimeType(MimeTypes.APPLICATION_M3U8) }.build()
+        val item = MediaItem.Builder().setUri(link.url).apply { if (asHls) setMimeType(MimeTypes.APPLICATION_M3U8) }.build()
         status = PlayStatus.Loading
         exo.setMediaSource(sources.createMediaSource(item))
         exo.prepare()
         exo.playWhenReady = true
+        armWatchdog()
     }
 
-    private fun retryOrFail(message: String) {
-        val ch = channel ?: return
-        if (retries < 2) {
+    /** A stream that sits on "loading" this long is treated as dead. */
+    private fun armWatchdog() {
+        handler.removeCallbacks(watchdog)
+        handler.postDelayed(watchdog, STALL_MS)
+    }
+
+    private fun retryOrGiveUp(message: String) {
+        handler.removeCallbacks(watchdog)
+        // With backups waiting, one retry is plenty before moving on.
+        val allowed = if (linkIndex < links.lastIndex) 1 else 2
+        if (retries < allowed) {
             retries++
             status = PlayStatus.Loading
-            handler.postDelayed({ if (channel?.id == ch.id) start(ch, asHls) }, 1_500)
+            handler.removeCallbacks(retry)
+            handler.postDelayed(retry, 1_200)
         } else {
-            status = PlayStatus.Failed(message)
+            giveUpOnLink(message)
         }
+    }
+
+    private fun giveUpOnLink(message: String) {
+        cancelPending()
+        if (linkIndex < links.lastIndex) {
+            linkIndex++
+            onBackup = true
+            beginLink()
+        } else {
+            exo.stop()
+            status = PlayStatus.Failed(message)
+            report(false)
+        }
+    }
+
+    private fun report(played: Boolean) {
+        if (reported) return
+        reported = true
+        channel?.let { onResult?.invoke(it.id, played) }
     }
 
     private fun looksLikeHls(url: String): Boolean {
@@ -161,6 +261,8 @@ class LivePlayer(context: Context) {
     }
 
     private companion object {
+        const val STALL_MS = 15_000L
+        const val ALT_AGENT = "VLC/3.0.20 LibVLC/3.0.20"
         val FORMAT_ERRORS = setOf(
             PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
             PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,

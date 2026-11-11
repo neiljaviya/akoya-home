@@ -45,6 +45,8 @@ class LiveTvActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean =
-        session.handleKey(event) || super.dispatchKeyEvent(event)
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        com.akoya.home.ui.components.ScrollPace.onKey(event)
+        return session.handleKey(event) || super.dispatchKeyEvent(event)
+    }
 }

@@ -98,8 +98,12 @@ fun HomeScreen(controller: LauncherController, config: LauncherConfig, apps: Lis
         if (focusedIndex < 0) return@LaunchedEffect
         val target = if (focusedIndex <= firstInteractive) 0 else focusedIndex
         val info = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == target }
+        // Holding Up/Down: jump straight there instead of queueing one long glide per row.
+        val fast = com.akoya.home.ui.components.ScrollPace.fast
         if (info != null) {
-            listState.animateScrollBy(info.offset.toFloat(), tween(520, easing = Emphasized))
+            listState.animateScrollBy(info.offset.toFloat(), if (fast) tween(110, easing = androidx.compose.animation.core.LinearEasing) else tween(520, easing = Emphasized))
+        } else if (fast) {
+            listState.scrollToItem(target)
         } else {
             listState.animateScrollToItem(target)
         }

@@ -45,7 +45,17 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.focusGroup
+import android.view.KeyEvent as NativeKeyEvent
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.Modifier
@@ -61,8 +71,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import coil.compose.AsyncImage
 import com.akoya.home.data.ConfigStore
 import com.akoya.home.ui.components.DialogOption
-import com.akoya.home.ui.components.ListScrollSpec
+import com.akoya.home.ui.components.NoScrollSpec
 import com.akoya.home.ui.components.OptionsDialog
+import com.akoya.home.ui.components.ScrollPace
 import com.akoya.home.ui.components.formatAmPm
 import com.akoya.home.ui.components.formatTime
 import com.akoya.home.ui.components.rememberNow
@@ -80,12 +91,11 @@ private val OnVideoMuted = Color(0xFFA39D91)
 fun LiveTvRoot(session: LiveTvSession, configStore: ConfigStore, onExit: () -> Unit) {
     val config by configStore.config.collectAsState()
     val store = session.store
-    val channels by store.channels.collectAsState()
+    val index by store.index.collectAsState()
     val state by store.state.collectAsState()
     val ready by store.ready.collectAsState()
 
-    val index = remember(channels, state.playlists) { ChannelIndex(channels, state.playlists) }
-    val favorites = remember(index, state.favorites) { store.favoriteChannels(index.all, state.favorites) }
+    val favorites = remember(index, state.favorites) { state.favorites.mapNotNull { index.byId[it] } }
     LaunchedEffect(index, favorites, ready) { session.sync(index, favorites, ready) }
 
     AkoyaTheme(config) {
@@ -98,7 +108,7 @@ fun LiveTvRoot(session: LiveTvSession, configStore: ConfigStore, onExit: () -> U
             ChannelBanner(session, index, state.playlists)
 
             when (session.panel) {
-                Panel.CHANNELS -> ChannelPanel(session, index, favorites, state.favorites)
+                Panel.CHANNELS -> ChannelPanel(session, index, favorites, state)
                 Panel.PLAYLISTS -> PlaylistsScreen(session, config, configStore, hasChannels = index.all.isNotEmpty(), onExit = onExit)
                 Panel.NONE -> Unit
             }
@@ -180,6 +190,10 @@ private fun ChannelBanner(session: LiveTvSession, index: ChannelIndex, playlists
                     Icon(Icons.Filled.Star, contentDescription = "Favourite", tint = p.accent.onVideo(), modifier = Modifier.size(22.dp))
                     Spacer(Modifier.width(16.dp))
                 }
+                if (session.player.onBackup && session.player.status == PlayStatus.Playing) {
+                    Text("BACKUP LINK", style = AkoyaType.section.copy(letterSpacing = AkoyaType.section.letterSpacing * 0.4f), color = OnVideoMuted)
+                    Spacer(Modifier.width(16.dp))
+                }
                 val q = session.player.quality
                 if (q.isNotEmpty() && session.player.status == PlayStatus.Playing) {
                     Text(q, style = AkoyaType.label, color = OnVideo, modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(Color.White.copy(alpha = 0.14f)).padding(horizontal = 8.dp, vertical = 3.dp))
@@ -199,7 +213,10 @@ private fun Color.onVideo(): Color = if ((red + green + blue) / 3f < 0.5f) Color
 
 @Composable
 fun ChannelLogo(ch: Channel, modifier: Modifier = Modifier) {
-    if (ch.logo.isBlank()) {
+    // While the list is flying past, don't start a download for every row that flashes by.
+    var load by remember(ch.id) { mutableStateOf(!ScrollPace.fast) }
+    if (!load) LaunchedEffect(ch.id) { delay(260); load = true }
+    if (ch.logo.isBlank() || !load) {
         Box(modifier.clip(RoundedCornerShape(8.dp)).background(Color.White.copy(alpha = 0.08f)), contentAlignment = Alignment.Center) {
             Text(ch.name.take(1).uppercase(), style = AkoyaType.label, color = OnVideoMuted)
         }
@@ -210,17 +227,42 @@ fun ChannelLogo(ch: Channel, modifier: Modifier = Modifier) {
 
 // ------------------------------------------------------------------------------------------ channel list
 
+private const val PIVOT_ROWS = 4
+private const val PAGE_ROWS = 9
+
+/**
+ * Keeps the focused row a fixed few rows from the top. One press glides; holding the button
+ * (or pressing quickly) jumps with no animation, so the list keeps up with the remote.
+ */
+@Composable
+private fun PivotScroll(state: LazyListState, focused: Int) {
+    LaunchedEffect(focused) {
+        if (focused < 0) return@LaunchedEffect
+        val target = (focused - PIVOT_ROWS).coerceAtLeast(0)
+        val info = state.layoutInfo.visibleItemsInfo.firstOrNull { it.index == target }
+        when {
+            ScrollPace.fast || info == null -> state.scrollToItem(target)
+            info.offset != 0 -> state.animateScrollBy(info.offset.toFloat(), tween(150, easing = LinearEasing))
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
 @Composable
-private fun ChannelPanel(session: LiveTvSession, index: ChannelIndex, favorites: List<Channel>, favoriteIds: List<String>) {
+private fun ChannelPanel(session: LiveTvSession, index: ChannelIndex, favorites: List<Channel>, state: LiveTvState) {
     val p = LocalPalette.current
-    val list = remember(session.groupKey, index, favorites) { index.channels(session.groupKey, favorites) }
-    val favSet = remember(favoriteIds) { favoriteIds.toHashSet() }
+    // The channel column follows the focused group a beat later, so running down the
+    // group column doesn't rebuild the channel list on every row.
+    var shownKey by remember { mutableStateOf(session.groupKey) }
+    val list = remember(shownKey, index, favorites) { index.channels(shownKey, favorites) }
+    val favSet = remember(state.favorites) { state.favorites.toHashSet() }
     val listState = rememberLazyListState()
     val groupState = rememberLazyListState()
     val currentRow = remember { FocusRequester() }
     val currentGroup = remember { FocusRequester() }
-    var opened by remember { mutableStateOf(false) }
+    var focusedRow by remember { mutableIntStateOf(-1) }
+    var focusedGroup by remember { mutableIntStateOf(-1) }
+    var jumpTo by remember { mutableIntStateOf(-1) }
 
     val groupRows = remember(index, favorites.size) {
         listOf(
@@ -229,18 +271,25 @@ private fun ChannelPanel(session: LiveTvSession, index: ChannelIndex, favorites:
         ) + index.groups
     }
 
-    // On opening, land on the channel that's playing. After that, a new group starts at its top.
-    LaunchedEffect(session.groupKey) {
-        if (opened) { listState.scrollToItem(0); return@LaunchedEffect }
-        opened = true
+    // On opening, land on the channel that's playing.
+    LaunchedEffect(Unit) {
         val gi = groupRows.indexOfFirst { it.key == session.groupKey }
-        if (gi > 4) groupState.scrollToItem(gi - 3)
+        if (gi > PIVOT_ROWS) groupState.scrollToItem(gi - PIVOT_ROWS)
         val ci = list.indexOfFirst { it.id == session.current?.id }
-        if (ci >= 0) listState.scrollToItem((ci - 3).coerceAtLeast(0))
+        if (ci >= 0) listState.scrollToItem((ci - PIVOT_ROWS).coerceAtLeast(0))
         delay(90)
         val ok = ci >= 0 && runCatching { currentRow.requestFocus() }.isSuccess
         if (!ok) runCatching { currentGroup.requestFocus() }
     }
+    LaunchedEffect(session.groupKey) {
+        if (shownKey == session.groupKey) return@LaunchedEffect
+        delay(if (ScrollPace.fast) 220 else 90)
+        shownKey = session.groupKey
+        focusedRow = -1
+        listState.scrollToItem(0)
+    }
+    PivotScroll(listState, focusedRow)
+    PivotScroll(groupState, focusedGroup)
 
     Row(
         Modifier
@@ -249,11 +298,28 @@ private fun ChannelPanel(session: LiveTvSession, index: ChannelIndex, favorites:
             .background(Brush.horizontalGradient(0f to p.background.copy(alpha = 0.97f), 0.8f to p.background.copy(alpha = 0.93f), 1f to Color.Transparent))
             .padding(start = 40.dp, top = 30.dp, bottom = 24.dp),
     ) {
-        CompositionLocalProvider(LocalBringIntoViewSpec provides ListScrollSpec) {
+        // The lists scroll themselves (PivotScroll), so the built-in scroll-into-view is off.
+        CompositionLocalProvider(LocalBringIntoViewSpec provides NoScrollSpec) {
             Column(Modifier.width(236.dp)) {
                 Text("LIVE TV", style = AkoyaType.section, color = p.accent, modifier = Modifier.padding(start = 14.dp, bottom = 12.dp))
-                LazyColumn(state = groupState, modifier = Modifier.weight(1f).focusRestorer { if (groupState.layoutInfo.visibleItemsInfo.any { it.key == session.groupKey }) currentGroup else FocusRequester.Default }.focusGroup(), verticalArrangement = Arrangement.spacedBy(2.dp), contentPadding = PaddingValues(bottom = 12.dp)) {
-                    itemsIndexed(groupRows, key = { _, g -> g.key }) { _, g ->
+                LazyColumn(
+                    state = groupState,
+                    modifier = Modifier
+                        .weight(1f)
+                        .focusRestorer { if (groupState.layoutInfo.visibleItemsInfo.any { it.key == session.groupKey }) currentGroup else FocusRequester.Default }
+                        .focusGroup()
+                        // Right pressed before the channel column caught up: catch up first, so
+                        // focus never lands in a list that is about to be replaced.
+                        .onPreviewKeyEvent { ev ->
+                            if (ev.nativeKeyEvent.keyCode == NativeKeyEvent.KEYCODE_DPAD_RIGHT && shownKey != session.groupKey) {
+                                if (ev.type == KeyEventType.KeyDown) { shownKey = session.groupKey; focusedRow = -1 }
+                                true
+                            } else false
+                        },
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                    contentPadding = PaddingValues(bottom = 260.dp),
+                ) {
+                    itemsIndexed(groupRows, key = { _, g -> g.key }, contentType = { _, _ -> 0 }) { i, g ->
                         val selected = g.key == session.groupKey
                         // Every row always carries a requester, so selecting a row never reshapes
                         // its modifier chain (which could drop focus mid-press).
@@ -261,13 +327,13 @@ private fun ChannelPanel(session: LiveTvSession, index: ChannelIndex, favorites:
                         PanelRow(
                             selected = selected,
                             onClick = { session.groupKey = g.key },
-                            onFocus = { session.groupKey = g.key },
+                            onFocus = { session.groupKey = g.key; focusedGroup = i },
                             modifier = Modifier.focusRequester(if (selected) currentGroup else own),
                         ) { fg, sub ->
                             if (g.key == GROUP_FAV) {
                                 Icon(Icons.Filled.Star, null, tint = fg, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(8.dp))
-                            } else if (!g.isPlaylist && index.groups.any { it.isPlaylist }) {
+                            } else if (!g.isPlaylist && index.hasPlaylistRows) {
                                 Spacer(Modifier.width(12.dp))
                             }
                             Text(
@@ -288,36 +354,68 @@ private fun ChannelPanel(session: LiveTvSession, index: ChannelIndex, favorites:
             Spacer(Modifier.width(18.dp))
             Column(Modifier.width(400.dp)) {
                 Text(
-                    "${index.label(session.groupKey).uppercase()}  ·  ${list.size}",
+                    "${index.label(shownKey).uppercase()}  ·  ${list.size}",
                     style = AkoyaType.section, color = p.muted, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(start = 14.dp, bottom = 12.dp),
                 )
                 if (list.isEmpty()) {
                     Text(
-                        if (session.groupKey == GROUP_FAV) "No favourites yet.\nHold OK on any channel to add it here." else "No channels here.",
+                        if (shownKey == GROUP_FAV) "No favourites yet.\nHold OK on any channel to add it here." else "No channels here.",
                         style = AkoyaType.body, color = p.muted, modifier = Modifier.padding(14.dp),
                     )
                 }
-                LazyColumn(state = listState, modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp), contentPadding = PaddingValues(bottom = 40.dp)) {
-                    itemsIndexed(list, key = { _, c -> c.id }) { _, ch ->
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .weight(1f)
+                        // CH+/CH- (or page / rewind / fast-forward keys) skip a screenful at a time.
+                        .onPreviewKeyEvent { ev ->
+                            val step = when (ev.nativeKeyEvent.keyCode) {
+                                NativeKeyEvent.KEYCODE_CHANNEL_UP, NativeKeyEvent.KEYCODE_PAGE_DOWN, NativeKeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> PAGE_ROWS
+                                NativeKeyEvent.KEYCODE_CHANNEL_DOWN, NativeKeyEvent.KEYCODE_PAGE_UP, NativeKeyEvent.KEYCODE_MEDIA_REWIND -> -PAGE_ROWS
+                                else -> return@onPreviewKeyEvent false
+                            }
+                            if (ev.type == KeyEventType.KeyDown && focusedRow >= 0 && list.isNotEmpty()) {
+                                jumpTo = (focusedRow + step).coerceIn(0, list.lastIndex)
+                            }
+                            true
+                        },
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                    contentPadding = PaddingValues(bottom = 300.dp),
+                ) {
+                    itemsIndexed(list, key = { _, c -> c.id }, contentType = { _, _ -> 0 }) { i, ch ->
                         val playing = ch.id == session.current?.id
+                        val offAir = !playing && state.isOffAir(ch.id)
                         val own = remember { FocusRequester() }
+                        val requester = if (playing) currentRow else own
+                        if (jumpTo == i) LaunchedEffect(Unit) {
+                            runCatching { requester.requestFocus() }
+                            jumpTo = -1
+                        }
                         PanelRow(
                             selected = playing,
                             onClick = { session.tune(ch, list); session.panel = Panel.NONE },
                             onLongClick = { session.optionsFor = ch },
-                            modifier = Modifier.focusRequester(if (playing) currentRow else own),
+                            onFocus = { focusedRow = i },
+                            modifier = Modifier.focusRequester(requester).alpha(if (offAir) 0.45f else 1f),
                         ) { fg, sub ->
                             Text((index.numberOf[ch.id] ?: 0).toString(), style = AkoyaType.small, color = sub, modifier = Modifier.width(40.dp), maxLines = 1)
                             ChannelLogo(ch, Modifier.size(width = 46.dp, height = 28.dp))
                             Spacer(Modifier.width(12.dp))
                             Text(ch.name, style = AkoyaType.body, color = fg, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                            if (offAir) Text("NOT WORKING", style = AkoyaType.small, color = sub, modifier = Modifier.padding(start = 6.dp))
                             if (ch.id in favSet) Icon(Icons.Filled.Star, "Favourite", tint = sub, modifier = Modifier.padding(start = 6.dp).size(15.dp))
                             if (playing) Icon(Icons.Filled.GraphicEq, "Playing", tint = fg, modifier = Modifier.padding(start = 6.dp).size(17.dp))
                         }
                     }
                 }
             }
+        }
+    }
+    // A page jump to a row that isn't on screen yet: bring it in, then the row takes focus.
+    LaunchedEffect(jumpTo) {
+        if (jumpTo >= 0 && listState.layoutInfo.visibleItemsInfo.none { it.index == jumpTo }) {
+            listState.scrollToItem((jumpTo - PIVOT_ROWS).coerceAtLeast(0))
         }
     }
 }
