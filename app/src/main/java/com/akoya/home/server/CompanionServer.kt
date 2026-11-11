@@ -10,6 +10,8 @@ import com.akoya.home.data.ScreensaverStyle
 import com.akoya.home.data.TmdbRepository
 import com.akoya.home.data.WallpaperMode
 import com.akoya.home.data.enumOrNull
+import com.akoya.home.livetv.LiveTvStore
+import com.akoya.home.livetv.PLAYLIST_PRESETS
 import fi.iki.elonen.NanoHTTPD
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
@@ -81,6 +83,32 @@ class CompanionServer private constructor(private val ctx: Context) : NanoHTTPD(
                 ok(JSONObject().put("wallpaper", name))
             }
             path == "/settings" && m == Method.POST -> saveSettings(readJson(s))
+            // ---------- live TV playlists ----------
+            path == "/livetv" && m == Method.GET -> liveTv()
+            path == "/livetv/add" && m == Method.POST -> {
+                val b = readJson(s)
+                val live = LiveTvStore.get(ctx)
+                try {
+                    when {
+                        b.optString("preset").isNotBlank() ->
+                            live.addPreset(b.optString("preset")) ?: throw IllegalArgumentException("Unknown list")
+                        b.optString("server").isNotBlank() ->
+                            live.addXtream(b.optString("name"), b.optString("server"), b.optString("username"), b.optString("password"))
+                        else -> live.addM3u(b.optString("name"), b.optString("url"))
+                    }
+                    liveTv()
+                } catch (e: IllegalArgumentException) {
+                    json(Response.Status.BAD_REQUEST, JSONObject().put("error", e.message ?: "Couldn't add that"))
+                }
+            }
+            path == "/livetv/refresh" && m == Method.POST -> { LiveTvStore.get(ctx).refreshAsync(param(s, "id").orEmpty()); liveTv() }
+            path == "/livetv/toggle" && m == Method.POST -> {
+                val live = LiveTvStore.get(ctx)
+                val id = param(s, "id").orEmpty()
+                live.current.playlists.firstOrNull { it.id == id }?.let { live.setEnabled(id, !it.enabled) }
+                liveTv()
+            }
+            path == "/livetv/remove" && m == Method.POST -> { LiveTvStore.get(ctx).remove(param(s, "id").orEmpty()); liveTv() }
             // ---------- file manager ----------
             path == "/fs/roots" -> json(Response.Status.OK, JSONObject().put("roots", JSONArray().apply {
                 FileRoots.list(ctx).forEach { put(JSONObject().put("name", it.label).put("path", it.file.absolutePath)) }
@@ -121,6 +149,26 @@ class CompanionServer private constructor(private val ctx: Context) : NanoHTTPD(
             }
             else -> text(Response.Status.NOT_FOUND, "Unknown API")
         }
+    }
+
+    /** Playlists for the phone page. Logins and full links stay on the TV. */
+    private fun liveTv(): Response {
+        val live = LiveTvStore.get(ctx)
+        val loading = live.loading.value
+        val errors = live.errors.value
+        val arr = JSONArray()
+        live.current.playlists.forEach { p ->
+            arr.put(
+                JSONObject().put("id", p.id).put("name", p.name).put("kind", p.kind.name)
+                    .put("host", runCatching { java.net.URL(p.url).host }.getOrDefault(""))
+                    .put("enabled", p.enabled).put("channels", p.channelCount).put("updated", p.updatedAt)
+                    .put("loading", p.id in loading).put("error", errors[p.id] ?: JSONObject.NULL),
+            )
+        }
+        val presets = JSONArray()
+        PLAYLIST_PRESETS.filter { pre -> live.current.playlists.none { it.url == pre.url } }
+            .forEach { presets.put(JSONObject().put("id", it.id).put("name", it.name)) }
+        return ok(JSONObject().put("playlists", arr).put("presets", presets).put("favorites", live.current.favorites.size))
     }
 
     private fun status(): Response {
