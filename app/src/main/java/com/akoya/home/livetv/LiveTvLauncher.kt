@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.FormatListBulleted
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.PlaylistAdd
@@ -116,6 +117,9 @@ private fun LazyListScope.liveActions(ctx: android.content.Context, s: LiveSumma
     if (s.channelCount > 0) {
         item(key = "__watch") {
             ActionCard(if (s.last != null) "Resume ${s.last.name}" else "Watch live TV", Icons.Filled.LiveTv, width, firstFocus) { LiveTvSession.launch(ctx) }
+        }
+        item(key = "__guide") {
+            ActionCard("TV guide", Icons.Filled.CalendarMonth, width, null) { LiveTvSession.launch(ctx, open = LiveTvSession.OPEN_GUIDE) }
         }
         item(key = "__list") {
             ActionCard("All channels", Icons.Filled.FormatListBulleted, width, null) { LiveTvSession.launch(ctx, open = LiveTvSession.OPEN_CHANNELS) }

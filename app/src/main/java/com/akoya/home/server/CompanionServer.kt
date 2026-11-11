@@ -89,16 +89,25 @@ class CompanionServer private constructor(private val ctx: Context) : NanoHTTPD(
                 val b = readJson(s)
                 val live = LiveTvStore.get(ctx)
                 try {
-                    when {
+                    val added = when {
                         b.optString("preset").isNotBlank() ->
                             live.addPreset(b.optString("preset")) ?: throw IllegalArgumentException("Unknown list")
                         b.optString("server").isNotBlank() ->
                             live.addXtream(b.optString("name"), b.optString("server"), b.optString("username"), b.optString("password"))
                         else -> live.addM3u(b.optString("name"), b.optString("url"))
                     }
+                    if (b.optString("guide").isNotBlank()) live.setGuideUrl(added.id, b.optString("guide"))
                     liveTv()
                 } catch (e: IllegalArgumentException) {
                     json(Response.Status.BAD_REQUEST, JSONObject().put("error", e.message ?: "Couldn't add that"))
+                }
+            }
+            path == "/livetv/guide" && m == Method.POST -> {
+                try {
+                    LiveTvStore.get(ctx).setGuideUrl(param(s, "id").orEmpty(), readJson(s).optString("guide"))
+                    liveTv()
+                } catch (e: IllegalArgumentException) {
+                    json(Response.Status.BAD_REQUEST, JSONObject().put("error", e.message ?: "Couldn't use that link"))
                 }
             }
             path == "/livetv/refresh" && m == Method.POST -> { LiveTvStore.get(ctx).refreshAsync(param(s, "id").orEmpty()); liveTv() }
@@ -162,7 +171,10 @@ class CompanionServer private constructor(private val ctx: Context) : NanoHTTPD(
                 JSONObject().put("id", p.id).put("name", p.name).put("kind", p.kind.name)
                     .put("host", runCatching { java.net.URL(p.url).host }.getOrDefault(""))
                     .put("enabled", p.enabled).put("channels", p.channelCount).put("updated", p.updatedAt)
-                    .put("loading", p.id in loading).put("error", errors[p.id] ?: JSONObject.NULL),
+                    .put("loading", p.id in loading).put("error", errors[p.id] ?: JSONObject.NULL)
+                    .put("guide", p.guideCount).put("guideSet", p.guideUrl.isNotBlank())
+                    .put("guideLoading", p.id in live.guide.loading.value)
+                    .put("guideError", live.guideErrors.value[p.id] ?: JSONObject.NULL),
             )
         }
         val presets = JSONArray()

@@ -29,7 +29,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
@@ -109,6 +111,7 @@ fun LiveTvRoot(session: LiveTvSession, configStore: ConfigStore, onExit: () -> U
 
             when (session.panel) {
                 Panel.CHANNELS -> ChannelPanel(session, index, favorites, state)
+                Panel.GUIDE -> GuideScreen(session, index)
                 Panel.PLAYLISTS -> PlaylistsScreen(session, config, configStore, hasChannels = index.all.isNotEmpty(), onExit = onExit)
                 Panel.NONE -> Unit
             }
@@ -146,7 +149,10 @@ private fun StatusOverlay(session: LiveTvSession) {
             ) {
                 Text(status.message, style = AkoyaType.title, color = OnVideo)
                 Spacer(Modifier.height(6.dp))
-                Text("Up or Down for another channel  ·  OK for the channel list", style = AkoyaType.body, color = OnVideoMuted)
+                Text(
+                    if (session.archive != null) "Back to return to live TV" else "Up or Down for another channel  ·  OK for the channel list",
+                    style = AkoyaType.body, color = OnVideoMuted,
+                )
             }
             else -> Unit
         }
@@ -166,7 +172,9 @@ private fun ChannelBanner(session: LiveTvSession, index: ChannelIndex, playlists
         delay(5_000)
         visible = false
     }
-    val show = session.panel == Panel.NONE && (visible || session.player.status is PlayStatus.Failed)
+    val archive = session.archive
+    val guide = if (archive == null) rememberNowNext(ch) else null
+    val show = session.panel == Panel.NONE && (visible || session.player.paused || session.player.status is PlayStatus.Failed)
     AnimatedVisibility(visible = show, enter = fadeIn(), exit = fadeOut()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomStart) {
             Row(
@@ -183,9 +191,35 @@ private fun ChannelBanner(session: LiveTvSession, index: ChannelIndex, playlists
                 Column(Modifier.weight(1f)) {
                     Text(ch.name, style = AkoyaType.title, color = OnVideo, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     val source = playlists.firstOrNull { it.id == ch.playlistId }?.name.orEmpty()
-                    val line = listOf(ch.group, source).filter { it.isNotBlank() }.joinToString("  ·  ")
-                    if (line.isNotEmpty()) Text(line.uppercase(), style = AkoyaType.section, color = OnVideoMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    val on = guide?.now
+                    when {
+                        archive != null -> {
+                            // The moment being watched: where this stream began plus how far in it is.
+                            val tick by rememberNow(withSeconds = true)
+                            val at = remember(tick, archive) { archive.from + session.player.positionMs }
+                            Text(
+                                "CATCH-UP  ·  " + clockText(at, config.use24h).uppercase() + if (session.player.paused) "  ·  PAUSED" else "",
+                                style = AkoyaType.section, color = p.accent.onVideo(), maxLines = 1,
+                            )
+                            Text(archive.title.ifBlank { "Recorded earlier" }, style = AkoyaType.body, color = OnVideo, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            ProgressLine(((at - archive.start).toFloat() / (archive.stop - archive.start).coerceAtLeast(1)).coerceIn(0f, 1f), p.accent.onVideo())
+                            Text("◀ ▶  skip a minute   ·   OK  pause   ·   Back  live TV", style = AkoyaType.small, color = OnVideoMuted)
+                        }
+                        on != null -> {
+                            Text(
+                                on.title + "   " + clockText(on.start, config.use24h) + " – " + clockText(on.stop, config.use24h),
+                                style = AkoyaType.body, color = OnVideo, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            )
+                            ProgressLine(on.progress(System.currentTimeMillis()), p.accent.onVideo())
+                            guide?.next?.let { Text("Next  " + it.title, style = AkoyaType.small, color = OnVideoMuted, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                        }
+                        else -> {
+                            val line = listOf(ch.group, source).filter { it.isNotBlank() }.joinToString("  ·  ")
+                            if (line.isNotEmpty()) Text(line.uppercase(), style = AkoyaType.section, color = OnVideoMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
                 }
+                Spacer(Modifier.width(18.dp))
                 if (ch.id in session.store.current.favorites) {
                     Icon(Icons.Filled.Star, contentDescription = "Favourite", tint = p.accent.onVideo(), modifier = Modifier.size(22.dp))
                     Spacer(Modifier.width(16.dp))
@@ -196,7 +230,8 @@ private fun ChannelBanner(session: LiveTvSession, index: ChannelIndex, playlists
                 }
                 val q = session.player.quality
                 if (q.isNotEmpty() && session.player.status == PlayStatus.Playing) {
-                    Text(q, style = AkoyaType.label, color = OnVideo, modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(Color.White.copy(alpha = 0.14f)).padding(horizontal = 8.dp, vertical = 3.dp))
+                    val rate = session.player.fps
+                    Text(if (rate > 0f) q + "  " + (if (rate % 1f == 0f) rate.toInt().toString() else rate.toString()) + " fps" else q, style = AkoyaType.label, color = OnVideo, modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(Color.White.copy(alpha = 0.14f)).padding(horizontal = 8.dp, vertical = 3.dp))
                     Spacer(Modifier.width(18.dp))
                 }
                 val now by rememberNow(withSeconds = false)
@@ -205,6 +240,13 @@ private fun ChannelBanner(session: LiveTvSession, index: ChannelIndex, playlists
                 if (ampm.isNotEmpty()) Text(ampm, style = AkoyaType.small, color = OnVideoMuted, modifier = Modifier.padding(start = 4.dp, top = 10.dp))
             }
         }
+    }
+}
+
+@Composable
+private fun ProgressLine(fraction: Float, color: Color) {
+    Box(Modifier.padding(vertical = 5.dp).width(260.dp).height(3.dp).clip(RoundedCornerShape(2.dp)).background(Color.White.copy(alpha = 0.22f))) {
+        Box(Modifier.fillMaxWidth(fraction).height(3.dp).background(color))
     }
 }
 
@@ -256,6 +298,8 @@ private fun ChannelPanel(session: LiveTvSession, index: ChannelIndex, favorites:
     var shownKey by remember { mutableStateOf(session.groupKey) }
     val list = remember(shownKey, index, favorites) { index.channels(shownKey, favorites) }
     val favSet = remember(state.favorites) { state.favorites.toHashSet() }
+    val guideVersion by session.store.guide.version.collectAsState()
+    val hasGuide = remember(guideVersion) { !session.store.guide.isEmpty }
     val listState = rememberLazyListState()
     val groupState = rememberLazyListState()
     val currentRow = remember { FocusRequester() }
@@ -345,6 +389,11 @@ private fun ChannelPanel(session: LiveTvSession, index: ChannelIndex, favorites:
                         }
                     }
                 }
+                PanelRow(selected = false, onClick = { session.openGuide() }) { fg, _ ->
+                    Icon(Icons.Filled.CalendarMonth, null, tint = fg, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("TV guide", style = AkoyaType.body, color = fg)
+                }
                 PanelRow(selected = false, onClick = { session.panel = Panel.PLAYLISTS }) { fg, _ ->
                     Icon(Icons.Filled.PlaylistAdd, null, tint = fg, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
@@ -402,7 +451,13 @@ private fun ChannelPanel(session: LiveTvSession, index: ChannelIndex, favorites:
                             Text((index.numberOf[ch.id] ?: 0).toString(), style = AkoyaType.small, color = sub, modifier = Modifier.width(40.dp), maxLines = 1)
                             ChannelLogo(ch, Modifier.size(width = 46.dp, height = 28.dp))
                             Spacer(Modifier.width(12.dp))
-                            Text(ch.name, style = AkoyaType.body, color = fg, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                            Column(Modifier.weight(1f)) {
+                                Text(ch.name, style = AkoyaType.body, color = fg, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                if (hasGuide) rememberNowNext(ch)?.now?.let { on ->
+                                    Text(on.title, style = AkoyaType.small, color = sub, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
+                            if (ch.hasCatchup) Icon(Icons.Filled.History, "Catch-up", tint = sub, modifier = Modifier.padding(start = 6.dp).size(14.dp))
                             if (offAir) Text("NOT WORKING", style = AkoyaType.small, color = sub, modifier = Modifier.padding(start = 6.dp))
                             if (ch.id in favSet) Icon(Icons.Filled.Star, "Favourite", tint = sub, modifier = Modifier.padding(start = 6.dp).size(15.dp))
                             if (playing) Icon(Icons.Filled.GraphicEq, "Playing", tint = fg, modifier = Modifier.padding(start = 6.dp).size(17.dp))
@@ -453,6 +508,7 @@ private fun PanelRow(
 @Composable
 private fun ChannelOptions(session: LiveTvSession, ch: Channel, favoriteIds: List<String>) {
     val fav = ch.id in favoriteIds
+    val onNow = rememberNowNext(ch)?.now
     OptionsDialog(
         title = ch.name,
         subtitle = ch.group.ifBlank { null },
@@ -463,6 +519,10 @@ private fun ChannelOptions(session: LiveTvSession, ch: Channel, favoriteIds: Lis
                 add(DialogOption("Move up in favourites", Icons.Filled.ArrowUpward, keepOpen = true) { session.store.moveFavorite(ch.id, -1) })
                 add(DialogOption("Move down in favourites", Icons.Filled.ArrowDownward, keepOpen = true) { session.store.moveFavorite(ch.id, +1) })
             }
+            if (onNow != null && Catchup.covers(ch, onNow.start, System.currentTimeMillis())) {
+                add(DialogOption("Watch \"${onNow.title.take(28)}\" from the start", Icons.Filled.History) { session.playArchive(ch, onNow) })
+            }
+            add(DialogOption("TV guide", Icons.Filled.CalendarMonth) { session.openGuide() })
             if (session.current?.id != ch.id) {
                 add(DialogOption("Watch", Icons.Filled.GraphicEq) { session.tune(ch, session.index.channels(session.groupKey, session.favorites)); session.panel = Panel.NONE })
             }

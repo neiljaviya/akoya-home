@@ -97,6 +97,29 @@ While watching:
 
 If a channel's link is dead, Live TV tries the channel's other links by itself (another quality, or the same channel in another playlist) and shows **Backup link** in the banner. A channel that fails twice in a row is dimmed and marked **Not working**, and Up/Down skips it; it clears as soon as it plays again.
 
+### TV guide
+
+Open it with the **Guide** button, the **TV guide** row at the bottom of the channel list, or the TV guide tile on the Live TV tab. Channels run down the side and time runs across; Left and Right step through programmes, CH+ and CH− page through channels, and OK tunes in. The banner and the channel list also show what's on now and next.
+
+Where the guide comes from:
+
+- An **Xtream login** brings its own guide.
+- An **M3U playlist** is checked for a guide link in its first line (`url-tvg`).
+- Otherwise set one yourself: Playlists → pick the playlist → **Set a guide link** (an XMLTV link, `.xml` or `.xml.gz`), or use the phone page.
+- The free India and USA lists don't come with a guide. Their channels borrow programme data from your other playlists' guides when the channel names match.
+
+Guides refresh every 12 hours. Only programmes for channels you actually have are kept.
+
+### Catch-up
+
+Channels whose provider keeps recordings show a small clock icon in the channel list. In the guide, press OK on a programme that has already aired to watch it, or **hold OK** on the programme that's on now to start it from the beginning. While a recording plays: Left and Right skip a minute (hold for five), OK pauses, Back returns to live TV.
+
+Catch-up only exists where the provider offers it, so the free lists don't have it.
+
+### Auto frame rate
+
+On by default (Playlists → Picture). Live TV measures each channel's frame rate and asks the TV for a matching refresh rate: 50 Hz for 25 fps Indian channels, 60 Hz for 30 fps American ones. The screen may blank for a moment when it switches. If the TV only offers one refresh rate, nothing changes.
+
 To show favourite channels on Home, add the **Live TV** section in Settings → Home layout.
 
 Logins are stored only on the TV, in the app's private storage. They are not included in the settings backup.
@@ -142,6 +165,10 @@ app/src/main/java/com/akoya/home/
   livetv/M3u.kt              M3U playlist parser (unit-tested in app/src/test)
   livetv/LivePlayer.kt       Media3 player with HLS / MPEG-TS fallback and retries
   livetv/LiveTvActivity.kt   full-screen player; LiveTvScreen.kt is the channel list and banner
-  livetv/PlaylistsScreen.kt  add, refresh, switch off and remove playlists
+  livetv/PlaylistsScreen.kt  add, refresh, switch off and remove playlists; guide links; auto frame rate
+  livetv/EpgStore.kt         TV guide database; Xmltv.kt reads the XMLTV files
+  livetv/GuideScreen.kt      the guide grid and the now/next lookups
+  livetv/Catchup.kt          builds catch-up links (Xtream, shift, append, default, Flussonic)
+  livetv/FrameRate.kt        frame-rate measuring and display-rate choice
   livetv/LiveTvLauncher.kt   the Live TV tab and the Home section
 ```
