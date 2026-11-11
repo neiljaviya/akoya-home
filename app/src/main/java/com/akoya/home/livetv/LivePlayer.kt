@@ -7,6 +7,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
@@ -172,6 +173,23 @@ class LivePlayer(context: Context) {
                 }
             }
         })
+    }
+
+    /** Picture heights this stream offers (e.g. 1080, 720, 480); one or none when it has a single quality. */
+    fun videoHeights(): List<Int> {
+        val out = sortedSetOf<Int>()
+        for (group in exo.currentTracks.groups) {
+            if (group.type != C.TRACK_TYPE_VIDEO) continue
+            for (i in 0 until group.length) group.getTrackFormat(i).height.let { if (it > 0) out += it }
+        }
+        return out.toList().reversed()
+    }
+
+    /** Caps the picture height for streams that come in several qualities. 0 removes the cap. */
+    fun setMaxHeight(height: Int) {
+        val b = exo.trackSelectionParameters.buildUpon()
+        if (height > 0) b.setMaxVideoSize(Int.MAX_VALUE, height) else b.clearVideoSizeConstraints()
+        exo.trackSelectionParameters = b.build()
     }
 
     /** Tunes to [ch]. [backups] are other links for the same channel, tried in order if it fails. */
