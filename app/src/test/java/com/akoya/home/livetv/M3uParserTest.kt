@@ -90,3 +90,44 @@ class M3uParserTest {
         assertEquals("Sports", list[0].group)
     }
 }
+
+class ChannelIndexTest {
+    private fun ch(id: String, name: String, url: String, tvg: String = "", pl: String = "p1") =
+        Channel(id = id, playlistId = pl, name = name, url = url, tvgId = tvg)
+
+    @Test
+    fun nameKeyIgnoresQualityAndLabels() {
+        assertEquals("aajtak", ChannelIndex.nameKey("Aaj Tak HD (1080p) [Geo-blocked]"))
+        assertEquals("aajtak", ChannelIndex.nameKey("aaj tak"))
+        assertEquals("&pictures", ChannelIndex.nameKey("&Pictures HD"))
+        assertEquals("cn", ChannelIndex.nameKey("CN HD+"))
+        assertEquals("starsports1", ChannelIndex.nameKey("Star Sports 1 FHD"))
+        assertNotEquals(ChannelIndex.nameKey("Star Sports 1"), ChannelIndex.nameKey("Star Sports 2"))
+    }
+
+    @Test
+    fun alternatesFindSameChannelAcrossPlaylistsButNotItself() {
+        val a = ch("1", "Aaj Tak", "http://a/1")
+        val b = ch("2", "Aaj Tak HD", "http://a/2")
+        val c = ch("3", "IN: AAJ TAK (720p)", "http://b/9", pl = "p2")
+        val d = ch("4", "Zee News", "http://a/4", tvg = "AajTak.in@SD")
+        val e = ch("5", "Other", "http://a/5")
+        val same = ch("6", "Aaj Tak", "http://a/1")
+        val index = ChannelIndex(listOf(a, b, c, d, e, same), emptyList())
+        assertEquals(listOf("2", "3"), index.alternates(a).map { it.id })
+        assertEquals(listOf("1", "3"), index.alternates(b).map { it.id })
+        assertTrue(index.alternates(e).isEmpty())
+        val tagged = ch("7", "Aaj Tak", "http://a/7", tvg = "AajTak.in")
+        val index2 = ChannelIndex(listOf(tagged, d), emptyList())
+        assertEquals(listOf("4"), index2.alternates(tagged).map { it.id })
+    }
+
+    @Test
+    fun groupsListPlaylistsOnlyWhenThereAreSeveral() {
+        val one = ChannelIndex(listOf(ch("1", "A", "http://a/1").copy(group = "News"), ch("2", "B", "http://a/2").copy(group = "Kids")), emptyList())
+        assertEquals(listOf("News", "Kids"), one.groups.map { it.label })
+        val two = ChannelIndex(listOf(ch("1", "A", "http://a/1"), ch("2", "B", "http://b/2", pl = "p2")), emptyList())
+        assertEquals(listOf(true, true), two.groups.map { it.isPlaylist })
+        assertEquals(1, two.channels("p:p2", emptyList()).size)
+    }
+}

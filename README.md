@@ -91,8 +91,11 @@ While watching:
 | **Up / Down** (or CH−/CH+) | Previous / next channel in the current list |
 | **OK** or **Left** | Channel list. Groups on the left, channels on the right |
 | **Hold OK** on a channel (or **Menu**) | Add to favourites, or move it up or down in favourites |
+| **CH+ / CH−** in the channel list | Skip a screenful of channels. Holding Up or Down also scrolls without animation |
 | **Right** | Show the channel banner |
 | **Back** | Close the list, or leave Live TV |
+
+If a channel's link is dead, Live TV tries the channel's other links by itself (another quality, or the same channel in another playlist) and shows **Backup link** in the banner. A channel that fails twice in a row is dimmed and marked **Not working**, and Up/Down skips it; it clears as soon as it plays again.
 
 To show favourite channels on Home, add the **Live TV** section in Settings → Home layout.
 

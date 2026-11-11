@@ -32,6 +32,10 @@ class LiveTvSession(val store: LiveTvStore, val player: LivePlayer) {
     private var pendingPanel: Panel? = null
     private var stopped = false
 
+    init {
+        player.onResult = { id, played -> store.reportPlayback(id, played) }
+    }
+
     /** Reads what the launcher asked for: a channel to tune to and/or a panel to open. */
     fun request(intent: Intent?) {
         pendingChannelId = intent?.getStringExtra(EXTRA_CHANNEL)
@@ -74,7 +78,9 @@ class LiveTvSession(val store: LiveTvStore, val player: LivePlayer) {
         zapList = list
         zapKey = groupKey
         store.setLastChannel(ch.id)
-        player.play(ch)
+        // Backup links that are known to be dead go to the back of the queue.
+        val state = store.current
+        player.play(ch, index.alternates(ch).sortedBy { state.isOffAir(it.id) })
         bannerTick++
     }
 
@@ -89,7 +95,17 @@ class LiveTvSession(val store: LiveTvStore, val player: LivePlayer) {
         val list = zapList.ifEmpty { index.all }
         if (list.isEmpty()) return
         val i = list.indexOfFirst { it.id == current?.id }
-        val next = if (i < 0) list.first() else list[(i + delta).mod(list.size)]
+        var next = if (i < 0) list.first() else list[(i + delta).mod(list.size)]
+        // Step over channels that failed twice running (they stay in the list, dimmed).
+        if (i >= 0) {
+            val state = store.current
+            var j = i + delta
+            var steps = 0
+            while (state.isOffAir(next.id) && steps < list.size) {
+                j += delta; steps++
+                next = list[j.mod(list.size)]
+            }
+        }
         groupKey = zapKey
         tune(next, list)
     }

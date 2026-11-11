@@ -49,13 +49,13 @@ private class LiveSummary(val favorites: List<Channel>, val last: Channel?, val 
 @Composable
 private fun rememberLiveSummary(): LiveSummary {
     val store = LiveTvStore.get(LocalContext.current)
-    val channels by store.channels.collectAsState()
+    val index by store.index.collectAsState()
     val state by store.state.collectAsState()
-    return remember(channels, state) {
+    return remember(index, state.favorites, state.lastChannelId, state.playlists.size) {
         LiveSummary(
-            favorites = store.favoriteChannels(channels, state.favorites),
-            last = state.lastChannelId?.let { id -> channels.firstOrNull { it.id == id } },
-            channelCount = channels.size,
+            favorites = state.favorites.mapNotNull { index.byId[it] },
+            last = state.lastChannelId?.let { index.byId[it] },
+            channelCount = index.all.size,
             playlistCount = state.playlists.size,
         )
     }

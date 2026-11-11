@@ -40,6 +40,8 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch { controller.apps.refresh() }
         lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             com.akoya.home.server.CompanionServer.ensureStarted(applicationContext)
+            // Read the saved channel list now, so the Live TV tab opens without a pause.
+            com.akoya.home.livetv.LiveTvStore.get(applicationContext)
         }
     }
 
@@ -61,6 +63,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        com.akoya.home.ui.components.ScrollPace.onKey(event)
         controller.touch()
         if (controller.screensaverVisible) {
             // Any button wakes the screensaver and is swallowed.
