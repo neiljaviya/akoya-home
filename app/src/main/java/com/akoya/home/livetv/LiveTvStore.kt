@@ -40,11 +40,30 @@ data class Playlist(
     val enabled: Boolean = true,
     val channelCount: Int = 0,
     val updatedAt: Long = 0L,
+    /** Guide (XMLTV) link the user typed in; wins over the one the playlist names. */
+    val guideUrl: String = "",
+    /** Guide links found in the playlist itself, separated by spaces. */
+    val guideDetected: String = "",
+    val guideUpdatedAt: Long = 0L,
+    val guideCount: Int = 0,
+    /** The provider's time zone (Xtream catch-up links use the server's clock). */
+    val timezone: String = "",
 ) {
+    /** Where this playlist's guide comes from; empty when it has none. */
+    fun guideUrls(): List<String> = when {
+        guideUrl.isNotBlank() -> listOf(guideUrl)
+        guideDetected.isNotBlank() -> guideDetected.split(' ').filter { it.isNotBlank() }
+        kind == PlaylistKind.XTREAM ->
+            listOf("$url/xmltv.php?username=${URLEncoder.encode(username, "UTF-8")}&password=${URLEncoder.encode(password, "UTF-8")}")
+        else -> emptyList()
+    }
+
     fun toJson(): JSONObject = JSONObject()
         .put("id", id).put("name", name).put("kind", kind.name).put("url", url)
         .put("username", username).put("password", password).put("enabled", enabled)
         .put("channelCount", channelCount).put("updatedAt", updatedAt)
+        .put("guideUrl", guideUrl).put("guideDetected", guideDetected)
+        .put("guideUpdatedAt", guideUpdatedAt).put("guideCount", guideCount).put("timezone", timezone)
 
     companion object {
         fun fromJson(o: JSONObject): Playlist? {
@@ -60,6 +79,11 @@ data class Playlist(
                 enabled = o.optBoolean("enabled", true),
                 channelCount = o.optInt("channelCount", 0),
                 updatedAt = o.optLong("updatedAt", 0L),
+                guideUrl = o.optString("guideUrl"),
+                guideDetected = o.optString("guideDetected"),
+                guideUpdatedAt = o.optLong("guideUpdatedAt", 0L),
+                guideCount = o.optInt("guideCount", 0),
+                timezone = o.optString("timezone"),
             )
         }
     }
@@ -72,6 +96,8 @@ data class LiveTvState(
     val lastChannelId: String? = null,
     /** Channel id to how many times in a row it failed to play. */
     val failing: Map<String, Int> = emptyMap(),
+    /** Switch the screen's refresh rate to suit each channel (25 fps on 50 Hz, and so on). */
+    val autoFrameRate: Boolean = true,
 ) {
     /** Failed twice running: dimmed in the list and skipped when zapping. */
     fun isOffAir(channelId: String) = (failing[channelId] ?: 0) >= 2
@@ -94,6 +120,7 @@ class LiveTvStore private constructor(private val context: Context) {
     private val prefs = context.getSharedPreferences("akoya_livetv", Context.MODE_PRIVATE)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val cacheDir = File(context.filesDir, "livetv").apply { mkdirs() }
+    val guide = EpgStore.get(context)
 
     private val _state = MutableStateFlow(loadState())
     val state: StateFlow<LiveTvState> = _state.asStateFlow()
@@ -118,6 +145,10 @@ class LiveTvStore private constructor(private val context: Context) {
     private val _ready = MutableStateFlow(false)
     val ready: StateFlow<Boolean> = _ready.asStateFlow()
 
+    /** Last guide download problem per playlist id. */
+    private val _guideErrors = MutableStateFlow<Map<String, String>>(emptyMap())
+    val guideErrors: StateFlow<Map<String, String>> = _guideErrors.asStateFlow()
+
     private val byPlaylist = HashMap<String, List<Channel>>()
     private val lock = Any()
 
@@ -128,8 +159,15 @@ class LiveTvStore private constructor(private val context: Context) {
                 synchronized(lock) { byPlaylist[p.id] = cached }
             }
             publish()
+            guide.load()
             _ready.value = true
-            refreshStale()
+            // Channel files saved by an older version don't know about catch-up: fetch them again.
+            if (prefs.getInt(KEY_FORMAT, 1) < CACHE_FORMAT) {
+                prefs.edit().putInt(KEY_FORMAT, CACHE_FORMAT).apply()
+                refreshAll()
+            } else {
+                refreshStale()
+            }
         }
     }
 
@@ -176,8 +214,51 @@ class LiveTvStore private constructor(private val context: Context) {
         updateState { s -> s.copy(playlists = s.playlists.filterNot { it.id == id }) }
         synchronized(lock) { byPlaylist.remove(id) }
         _errors.update { it - id }
+        _guideErrors.update { it - id }
         File(cacheDir, "$id.tsv").delete()
         publish()
+        scope.launch { guide.remove(id) }
+    }
+
+    /** Sets (or clears) the guide link for a playlist and downloads it. */
+    fun setGuideUrl(id: String, url: String) {
+        val clean = url.trim()
+        require(clean.isEmpty() || clean.startsWith("http://", true) || clean.startsWith("https://", true)) { "The guide link must start with http:// or https://" }
+        updateState { s -> s.copy(playlists = s.playlists.map { if (it.id == id) it.copy(guideUrl = clean, guideUpdatedAt = 0L) else it }) }
+        refreshGuideAsync(id)
+    }
+
+    fun setAutoFrameRate(on: Boolean) = updateState { it.copy(autoFrameRate = on) }
+
+    fun refreshGuideAsync(id: String) {
+        scope.launch { refreshGuide(id) }
+    }
+
+    /** Downloads one playlist's guide. Needs the channels loaded first, to know what to keep. */
+    private fun refreshGuide(id: String) {
+        val p = current.playlists.firstOrNull { it.id == id } ?: return
+        val urls = p.guideUrls()
+        if (urls.isEmpty() || !p.enabled) return
+        val all = _channels.value
+        if (all.isEmpty()) return
+        val ids = HashSet<String>()
+        val names = HashSet<String>()
+        var catchup = false
+        for (c in all) {
+            if (c.tvgId.isNotBlank()) { val t = c.tvgId.lowercase(); ids += t; ids += t.substringBefore('@') }
+            ChannelIndex.nameKey(c.name).let { if (it.length >= 3) names += it }
+            if (c.hasCatchup) catchup = true
+        }
+        val past = if (catchup) GUIDE_PAST_CATCHUP_MS else GUIDE_PAST_MS
+        guide.refresh(id, urls, GuideWanted(ids, names), past, GUIDE_FUTURE_MS).fold(
+            onSuccess = { count ->
+                _guideErrors.update { it - id }
+                if (count > 0) updateState { s ->
+                    s.copy(playlists = s.playlists.map { if (it.id == id) it.copy(guideCount = count, guideUpdatedAt = System.currentTimeMillis()) else it })
+                }
+            },
+            onFailure = { e -> _guideErrors.update { it + (id to friendly(e)) } },
+        )
     }
 
     fun setEnabled(id: String, enabled: Boolean) {
@@ -195,8 +276,14 @@ class LiveTvStore private constructor(private val context: Context) {
 
     /** Re-downloads playlists that are more than a day old. */
     fun refreshStale() {
-        val cutoff = System.currentTimeMillis() - STALE_MS
-        current.playlists.filter { it.enabled && it.updatedAt < cutoff }.forEach { refreshAsync(it.id) }
+        val now = System.currentTimeMillis()
+        current.playlists.filter { it.enabled }.forEach { p ->
+            when {
+                // A playlist refresh fetches the guide afterwards as well.
+                p.updatedAt < now - STALE_MS -> refreshAsync(p.id)
+                p.guideUpdatedAt < now - GUIDE_STALE_MS && p.guideUrls().isNotEmpty() -> refreshGuideAsync(p.id)
+            }
+        }
     }
 
     /** Downloads one playlist again. Keeps the old channels if the download fails. */
@@ -204,18 +291,27 @@ class LiveTvStore private constructor(private val context: Context) {
         val p = current.playlists.firstOrNull { it.id == id } ?: return@withContext Result.failure(IllegalArgumentException("No such playlist"))
         if (!_loading.compareAndAdd(id)) return@withContext Result.success(p.channelCount)
         val result = runCatching {
+            var detected = p.guideDetected
+            var zone = p.timezone
             val list = when (p.kind) {
-                PlaylistKind.M3U -> downloadM3u(p)
-                PlaylistKind.XTREAM -> downloadXtream(p)
+                PlaylistKind.M3U -> downloadM3u(p).also { detected = it.epgUrls.joinToString(" ") }.channels
+                PlaylistKind.XTREAM -> { zone = xtreamTimezone(p).ifBlank { zone }; downloadXtream(p) }
             }
             if (list.isEmpty()) throw IllegalStateException("No channels found in this playlist")
             writeCache(id, list)
             synchronized(lock) { byPlaylist[id] = list }
             updateState { s ->
-                s.copy(playlists = s.playlists.map { if (it.id == id) it.copy(channelCount = list.size, updatedAt = System.currentTimeMillis()) else it })
+                s.copy(playlists = s.playlists.map {
+                    if (it.id == id) it.copy(channelCount = list.size, updatedAt = System.currentTimeMillis(), guideDetected = detected, timezone = zone) else it
+                })
             }
             publish()
             list.size
+        }
+        if (result.isSuccess) {
+            // New channels may match guides that other playlists brought, so those look again too.
+            val first = p.updatedAt == 0L
+            current.playlists.filter { it.enabled && (it.id == id || first) && it.guideUrls().isNotEmpty() }.forEach { refreshGuideAsync(it.id) }
         }
         result.fold(
             onSuccess = { _errors.update { it - id } },
@@ -260,6 +356,12 @@ class LiveTvStore private constructor(private val context: Context) {
         }
     }
 
+    /** The clock a channel's provider keeps, for catch-up links that use server time. */
+    fun zoneFor(ch: Channel): java.time.ZoneId {
+        val tz = current.playlists.firstOrNull { it.id == ch.playlistId }?.timezone.orEmpty()
+        return runCatching { if (tz.isBlank()) java.time.ZoneOffset.UTC else java.time.ZoneId.of(tz) }.getOrDefault(java.time.ZoneOffset.UTC)
+    }
+
     /** Favourite channels that still exist, in the user's order. */
     fun favoriteChannels(all: List<Channel>, favorites: List<String>): List<Channel> {
         if (favorites.isEmpty()) return emptyList()
@@ -291,6 +393,7 @@ class LiveTvStore private constructor(private val context: Context) {
                 playlists = (0 until (lists?.length() ?: 0)).mapNotNull { i -> lists?.optJSONObject(i)?.let(Playlist::fromJson) },
                 favorites = (0 until (favs?.length() ?: 0)).mapNotNull { i -> favs?.optString(i)?.ifBlank { null } },
                 lastChannelId = o.optString("lastChannelId").ifBlank { null },
+                autoFrameRate = o.optBoolean("autoFrameRate", true),
                 failing = o.optJSONObject("failing")?.let { f -> f.keys().asSequence().associateWith { k -> f.optInt(k) } }.orEmpty(),
             )
         }.getOrDefault(LiveTvState())
@@ -300,10 +403,35 @@ class LiveTvStore private constructor(private val context: Context) {
         .put("playlists", JSONArray().also { arr -> s.playlists.forEach { arr.put(it.toJson()) } })
         .put("favorites", JSONArray(s.favorites))
         .put("lastChannelId", s.lastChannelId ?: "")
+        .put("autoFrameRate", s.autoFrameRate)
         .put("failing", JSONObject().also { o -> s.failing.forEach { (k, v) -> o.put(k, v) } })
 
-    private fun downloadM3u(p: Playlist): List<Channel> =
-        open(p.url).use { input -> input.bufferedReader().useLines { M3uParser.parse(it, p.id) } }
+    private fun downloadM3u(p: Playlist): ParsedPlaylist =
+        open(p.url).use { input -> input.bufferedReader().useLines { M3uParser.parsePlaylist(it, p.id) } }
+
+    /** The provider's time zone, from the Xtream account call. Empty if it doesn't say. */
+    private fun xtreamTimezone(p: Playlist): String = runCatching {
+        val user = URLEncoder.encode(p.username, "UTF-8")
+        val pass = URLEncoder.encode(p.password, "UTF-8")
+        var zone = ""
+        open("${p.url}/player_api.php?username=$user&password=$pass").use { input ->
+            JsonReader(input.reader()).use { r ->
+                if (r.peek() != JsonToken.BEGIN_OBJECT) return@use
+                r.beginObject()
+                while (r.hasNext()) {
+                    if (r.nextName() == "server_info" && r.peek() == JsonToken.BEGIN_OBJECT) {
+                        r.beginObject()
+                        while (r.hasNext()) {
+                            if (r.nextName() == "timezone") zone = r.nextStringOrEmpty() else r.skipValue()
+                        }
+                        r.endObject()
+                    } else r.skipValue()
+                }
+                r.endObject()
+            }
+        }
+        zone
+    }.getOrDefault("")
 
     /** Xtream Codes "player API": categories first (for group names), then the live channels. */
     private fun downloadXtream(p: Playlist): List<Channel> {
@@ -342,6 +470,7 @@ class LiveTvStore private constructor(private val context: Context) {
                 r.beginArray()
                 while (r.hasNext()) {
                     var streamId = ""; var name = ""; var icon = ""; var epg = ""; var cat = ""
+                    var archive = false; var archiveDays = 0
                     r.beginObject()
                     while (r.hasNext()) {
                         when (r.nextName()) {
@@ -350,6 +479,8 @@ class LiveTvStore private constructor(private val context: Context) {
                             "stream_icon" -> icon = r.nextStringOrEmpty()
                             "epg_channel_id" -> epg = r.nextStringOrEmpty()
                             "category_id" -> cat = r.nextStringOrEmpty()
+                            "tv_archive" -> archive = r.nextStringOrEmpty().let { it == "1" || it == "true" }
+                            "tv_archive_duration" -> archiveDays = r.nextStringOrEmpty().toIntOrNull() ?: 0
                             else -> r.skipValue()
                         }
                     }
@@ -363,6 +494,8 @@ class LiveTvStore private constructor(private val context: Context) {
                             logo = icon,
                             group = categories[cat].orEmpty(),
                             tvgId = epg,
+                            catchup = if (archive) "xc" else "",
+                            catchupDays = if (archive) archiveDays.coerceAtLeast(1) else 0,
                         )
                     }
                 }
@@ -417,7 +550,7 @@ class LiveTvStore private constructor(private val context: Context) {
         val tmp = File(cacheDir, "$id.tmp")
         tmp.bufferedWriter().use { w ->
             for (c in list) {
-                w.write(listOf(c.id, c.name, c.url, c.logo, c.group, c.tvgId, c.userAgent, c.referrer).joinToString("\t") { clean(it) })
+                w.write(listOf(c.id, c.name, c.url, c.logo, c.group, c.tvgId, c.userAgent, c.referrer, c.catchup, c.catchupSource, c.catchupDays.toString()).joinToString("\t") { clean(it) })
                 w.write("\n")
             }
         }
@@ -433,7 +566,10 @@ class LiveTvStore private constructor(private val context: Context) {
                 lines.mapNotNull { line ->
                     val p = line.split('\t')
                     if (p.size < 8) null
-                    else Channel(id = p[0], playlistId = id, name = p[1], url = p[2], logo = p[3], group = p[4], tvgId = p[5], userAgent = p[6], referrer = p[7])
+                    else Channel(
+                        id = p[0], playlistId = id, name = p[1], url = p[2], logo = p[3], group = p[4], tvgId = p[5], userAgent = p[6], referrer = p[7],
+                        catchup = p.getOrElse(8) { "" }, catchupSource = p.getOrElse(9) { "" }, catchupDays = p.getOrNull(10)?.toIntOrNull() ?: 0,
+                    )
                 }.toList()
             }
         }.getOrDefault(emptyList())
@@ -455,7 +591,13 @@ class LiveTvStore private constructor(private val context: Context) {
     companion object {
         private const val TAG = "AkoyaLiveTv"
         private const val KEY = "state"
+        private const val KEY_FORMAT = "cacheFormat"
+        private const val CACHE_FORMAT = 2
         private const val STALE_MS = 24L * 60 * 60 * 1000
+        private const val GUIDE_STALE_MS = 12L * 60 * 60 * 1000
+        private const val GUIDE_PAST_MS = 3L * 60 * 60 * 1000
+        private const val GUIDE_PAST_CATCHUP_MS = 3L * 24 * 60 * 60 * 1000
+        private const val GUIDE_FUTURE_MS = 36L * 60 * 60 * 1000
         const val PLAYLIST_AGENT = "Mozilla/5.0 (Linux; Android 12; TV) AkoyaHome/1.0"
 
         @Volatile private var instance: LiveTvStore? = null

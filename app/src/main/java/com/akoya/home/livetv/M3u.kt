@@ -11,7 +11,18 @@ data class Channel(
     val tvgId: String = "",
     val userAgent: String = "",
     val referrer: String = "",
-)
+    /** Catch-up style: "" (none), "xc", "shift", "append", "default" or "flussonic". */
+    val catchup: String = "",
+    /** Link template for "append" and "default" catch-up. */
+    val catchupSource: String = "",
+    /** How many days back the provider keeps this channel. */
+    val catchupDays: Int = 0,
+) {
+    val hasCatchup: Boolean get() = catchup.isNotEmpty() && catchupDays > 0
+}
+
+/** A parsed playlist: its channels and any guide (XMLTV) links named in its header. */
+class ParsedPlaylist(val channels: List<Channel>, val epgUrls: List<String>)
 
 /**
  * Reads M3U / M3U8 channel lists (the "#EXTINF" format every IPTV provider uses).
@@ -20,8 +31,17 @@ data class Channel(
 object M3uParser {
     private val ATTR = Regex("""([A-Za-z0-9_-]+)="([^"]*)"""")
 
-    fun parse(lines: Sequence<String>, playlistId: String): List<Channel> {
+    fun parse(lines: Sequence<String>, playlistId: String): List<Channel> = parsePlaylist(lines, playlistId).channels
+
+    fun parsePlaylist(lines: Sequence<String>, playlistId: String): ParsedPlaylist {
         val out = ArrayList<Channel>()
+        val epg = ArrayList<String>()
+        var listCatchup = ""
+        var listCatchupSource = ""
+        var listCatchupDays = 0
+        var catchup = ""
+        var catchupSource = ""
+        var catchupDays = 0
         val seen = HashSet<String>()
         var name: String? = null
         var logo = ""
@@ -32,12 +52,25 @@ object M3uParser {
 
         fun reset() {
             name = null; logo = ""; group = ""; tvgId = ""; userAgent = ""; referrer = ""
+            catchup = ""; catchupSource = ""; catchupDays = 0
         }
 
         for (raw in lines) {
             val line = raw.trim().removePrefix("﻿")
             if (line.isEmpty()) continue
             when {
+                line.startsWith("#EXTM3U", ignoreCase = true) -> {
+                    for (m in ATTR.findAll(line)) {
+                        val v = m.groupValues[2].trim()
+                        when (m.groupValues[1].lowercase()) {
+                            "url-tvg", "x-tvg-url", "tvg-url" ->
+                                v.split(',').map { it.trim() }.filter { it.startsWith("http", true) }.forEach { if (it !in epg) epg += it }
+                            "catchup", "catchup-type" -> listCatchup = v.lowercase()
+                            "catchup-source" -> listCatchupSource = v
+                            "catchup-days" -> listCatchupDays = v.toIntOrNull() ?: 0
+                        }
+                    }
+                }
                 line.startsWith("#EXTINF", ignoreCase = true) -> {
                     reset()
                     val comma = titleComma(line)
@@ -52,6 +85,11 @@ object M3uParser {
                             "tvg-name" -> if (name.isNullOrBlank()) name = v
                             "user-agent", "http-user-agent" -> userAgent = v
                             "referrer", "http-referrer" -> referrer = v
+                            "catchup", "catchup-type" -> catchup = v.lowercase()
+                            "catchup-source" -> catchupSource = v
+                            "catchup-days" -> catchupDays = v.toIntOrNull() ?: catchupDays
+                            // Older spellings: days of archive, with the Xtream-style link.
+                            "timeshift", "tvg-rec" -> (v.toIntOrNull() ?: 0).let { d -> if (d > 0 && catchupDays == 0) catchupDays = d }
                         }
                     }
                 }
@@ -84,6 +122,18 @@ object M3uParser {
                         }
                         url = url.substring(0, bar).trim()
                     }
+                    // Channel settings win over the playlist-wide ones in the header.
+                    val cuSource = catchupSource.ifBlank { listCatchupSource }
+                    val declaredDays = if (catchupDays > 0) catchupDays else listCatchupDays
+                    val cuType = normaliseCatchup(
+                        catchup.ifBlank { listCatchup }.ifBlank {
+                            // Only a day count given ("timeshift=3"): that's the Xtream style.
+                            if (declaredDays > 0) (if (cuSource.isBlank()) "xc" else "default") else ""
+                        },
+                        cuSource,
+                    )
+                    // A catch-up type with no day count: assume a short archive.
+                    val cuDays = if (cuType.isEmpty()) 0 else if (declaredDays > 0) declaredDays else 3
                     if (isPlayable(url) && !isVod(url)) {
                         var id = playlistId + ":" + hash(url)
                         var n = 1
@@ -98,13 +148,26 @@ object M3uParser {
                             tvgId = tvgId,
                             userAgent = userAgent,
                             referrer = referrer,
+                            catchup = cuType,
+                            catchupSource = cuSource,
+                            catchupDays = cuDays,
                         )
                     }
                     reset()
                 }
             }
         }
-        return out
+        return ParsedPlaylist(out, epg)
+    }
+
+    private fun normaliseCatchup(type: String, source: String): String = when (type) {
+        "" -> ""
+        "xc", "xtream", "xtream-codes" -> "xc"
+        "shift", "timeshift" -> "shift"
+        "append" -> if (source.isBlank()) "shift" else "append"
+        "default" -> if (source.isBlank()) "shift" else "default"
+        "flussonic", "flussonic-hls", "flussonic-ts", "fs" -> "flussonic"
+        else -> if (source.isNotBlank()) "default" else ""
     }
 
     /** Index of the comma that separates the attributes from the channel title. */

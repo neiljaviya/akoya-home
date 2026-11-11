@@ -131,3 +131,118 @@ class ChannelIndexTest {
         assertEquals(1, two.channels("p:p2", emptyList()).size)
     }
 }
+
+class GuideAndCatchupTest {
+    @Test
+    fun headerGuideLinksAndCatchupAreRead() {
+        val text = """
+            #EXTM3U url-tvg="http://epg.example/a.xml.gz, http://epg.example/b.xml" catchup="shift" catchup-days="5"
+            #EXTINF:-1 tvg-id="one",One
+            http://h/one.m3u8
+            #EXTINF:-1 tvg-id="two" catchup="default" catchup-source="http://h/two-{utc}-{duration}.m3u8" catchup-days="2",Two
+            http://h/two.m3u8
+        """.trimIndent()
+        val parsed = M3uParser.parsePlaylist(text.lineSequence(), "p")
+        assertEquals(listOf("http://epg.example/a.xml.gz", "http://epg.example/b.xml"), parsed.epgUrls)
+        assertEquals("shift", parsed.channels[0].catchup)
+        assertEquals(5, parsed.channels[0].catchupDays)
+        assertEquals("default", parsed.channels[1].catchup)
+        assertEquals(2, parsed.channels[1].catchupDays)
+        assertTrue(parsed.channels[1].hasCatchup)
+    }
+
+    @Test
+    fun timeshiftAttributeMeansXtreamStyleAndPlainChannelsHaveNone() {
+        val parsed = M3uParser.parsePlaylist("#EXTM3U\n#EXTINF:-1 timeshift=\"3\",A\nhttp://h:80/live/u/p/7.ts\n#EXTINF:-1,B\nhttp://h/b\n".lineSequence(), "p")
+        assertEquals("xc", parsed.channels[0].catchup)
+        assertEquals(3, parsed.channels[0].catchupDays)
+        assertEquals("", parsed.channels[1].catchup)
+        assertEquals(false, parsed.channels[1].hasCatchup)
+    }
+
+    private fun ch(url: String, type: String, source: String = "") =
+        Channel(id = "1", playlistId = "p", name = "N", url = url, catchup = type, catchupSource = source, catchupDays = 3)
+
+    // 2026-11-11 06:30:00 UTC, one hour long; "now" is two hours after the start.
+    private val start = 1_794_378_600_000L
+    private val stop = start + 3_600_000
+    private val now = start + 7_200_000
+
+    @Test
+    fun xtreamCatchupUsesServerClockAndMinutes() {
+        val url = Catchup.url(ch("http://h:8080/live/user/pass/77.ts", "xc"), start, stop, now, java.time.ZoneId.of("Asia/Kolkata"))
+        assertEquals("http://h:8080/timeshift/user/pass/60/2026-11-11:12-00/77.ts", url)
+        val short = Catchup.url(ch("http://h:8080/user/pass/77", "xc"), start, stop, now)
+        assertEquals("http://h:8080/timeshift/user/pass/60/2026-11-11:06-30/77.ts", short)
+    }
+
+    @Test
+    fun otherCatchupStyles() {
+        val s = start / 1000
+        assertEquals("http://h/a.m3u8?utc=$s&lutc=${now / 1000}", Catchup.url(ch("http://h/a.m3u8", "shift"), start, stop, now))
+        assertEquals("http://h/a.m3u8?t=1&utc=$s&lutc=${now / 1000}", Catchup.url(ch("http://h/a.m3u8?t=1", "shift"), start, stop, now))
+        assertEquals("http://h/a.m3u8?from=$s&len=3600", Catchup.url(ch("http://h/a.m3u8", "append", "?from=\${start}&len={duration}"), start, stop, now))
+        assertEquals("http://x/2026/11/11/06-30.ts?o=7200", Catchup.url(ch("http://h/a", "default", "http://x/{Y}/{m}/{d}/{H}-{M}.ts?o={offset}"), start, stop, now))
+        assertEquals("http://h/ch/index-$s-3600.m3u8?token=9", Catchup.url(ch("http://h/ch/index.m3u8?token=9", "flussonic"), start, stop, now))
+        assertEquals("http://h/ch/timeshift_abs-$s.ts", Catchup.url(ch("http://h/ch/mpegts", "flussonic"), start, stop, now))
+    }
+
+    @Test
+    fun programmeStillOnAirEndsNowAndNoCatchupGivesNull() {
+        val live = Catchup.url(ch("http://h/a.m3u8", "append", "?d={duration}"), start, start + 4 * 3_600_000, now)
+        assertEquals("http://h/a.m3u8?d=7200", live)
+        assertEquals(null, Catchup.url(Channel(id = "1", playlistId = "p", name = "N", url = "http://h/a"), start, stop, now))
+        assertTrue(Catchup.covers(ch("http://h/a", "shift"), now - 2 * 86_400_000L, now))
+        assertEquals(false, Catchup.covers(ch("http://h/a", "shift"), now - 4 * 86_400_000L, now))
+        assertEquals(false, Catchup.covers(ch("http://h/a", "shift"), now + 1000, now))
+    }
+
+    @Test
+    fun xmltvTimes() {
+        assertEquals(start, Xmltv.time("20261111063000 +0000"))
+        assertEquals(start, Xmltv.time("20261111120000 +0530"))
+        assertEquals(start, Xmltv.time("20261111013000 -0500"))
+        assertEquals(start, Xmltv.time("202611110630"))
+        assertEquals(-1L, Xmltv.time("soon"))
+    }
+
+    @Test
+    fun xmltvStreamIsRead() {
+        val xml = """<?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE tv SYSTEM "xmltv.dtd">
+            <tv>
+              <channel id="AajTak.in"><display-name>Aaj Tak</display-name><display-name>AAJ TAK HD</display-name><icon src="x"/></channel>
+              <programme start="20261111063000 +0000" stop="20261111073000 +0000" channel="AajTak.in">
+                <title lang="hi">News &amp; Views</title><title lang="en">Second title</title><desc>Morning bulletin.</desc><category>News</category>
+              </programme>
+              <programme start="bad" stop="20261111073000 +0000" channel="AajTak.in"><title>Skipped</title></programme>
+            </tv>"""
+        val channels = ArrayList<Pair<String, List<String>>>()
+        val progs = ArrayList<Programme>()
+        Xmltv.parse(xml.byteInputStream(), object : Xmltv.Sink {
+            override fun channel(id: String, names: List<String>) { channels += id to names }
+            override fun programme(channelId: String, start: Long, stop: Long, title: String, description: String) {
+                assertEquals("AajTak.in", channelId)
+                progs += Programme(start, stop, title, description)
+            }
+        })
+        assertEquals(listOf("AajTak.in" to listOf("Aaj Tak", "AAJ TAK HD")), channels)
+        assertEquals(listOf(Programme(start, stop, "News & Views", "Morning bulletin.")), progs)
+        assertEquals(0.5f, progs[0].progress(start + 1_800_000), 0.001f)
+    }
+
+    @Test
+    fun frameRateChoice() {
+        assertEquals(50f, FrameRate.pick(25f, listOf(50f, 60f), 60f))
+        assertEquals(null, FrameRate.pick(30f, listOf(50f, 60f), 60f))
+        assertEquals(60f, FrameRate.pick(60f, listOf(50f, 60f), 50f))
+        assertEquals(null, FrameRate.pick(25f, listOf(60f), 60f))
+        assertEquals(24f, FrameRate.pick(23.976f, listOf(24f, 50f, 60f), 60f))
+        assertEquals(59.94f, FrameRate.pick(29.97f, listOf(50f, 59.94f, 60f), 60f))
+        assertEquals(null, FrameRate.pick(29.97f, listOf(50f, 60f), 60f))
+        assertEquals(25f, FrameRate.snap(25.02f))
+        assertEquals(0f, FrameRate.snap(41f))
+        val times = LongArray(30) { it * 40_000L }
+        assertEquals(25f, FrameRate.fromTimestamps(times, 30))
+    }
+}

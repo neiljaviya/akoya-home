@@ -8,7 +8,10 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 
-enum class Panel { NONE, CHANNELS, PLAYLISTS }
+enum class Panel { NONE, CHANNELS, GUIDE, PLAYLISTS }
+
+/** A catch-up recording being watched: [from] is the moment the current stream began at. */
+data class ArchivePlay(val channel: Channel, val title: String, val start: Long, val stop: Long, val from: Long)
 
 /** What is on screen in Live TV and what the remote does. Lives as long as the Live TV activity. */
 class LiveTvSession(val store: LiveTvStore, val player: LivePlayer) {
@@ -32,9 +35,52 @@ class LiveTvSession(val store: LiveTvStore, val player: LivePlayer) {
     private var pendingPanel: Panel? = null
     private var stopped = false
 
+    /** Set while a catch-up recording is playing instead of the live channel. */
+    var archive by mutableStateOf<ArchivePlay?>(null)
+        private set
+
+    /** The channels the guide lists: the group that was being watched. */
+    var guideChannels: List<Channel> = emptyList()
+        private set
+
     init {
         player.onResult = { id, played -> store.reportPlayback(id, played) }
+        player.onArchiveEnded = { backToLive() }
     }
+
+    fun openGuide() {
+        guideChannels = zapList.ifEmpty { index.all }
+        if (guideChannels.isNotEmpty()) panel = Panel.GUIDE
+    }
+
+    /** Plays [programme] from the provider's archive. False when the channel has no catch-up for it. */
+    fun playArchive(ch: Channel, programme: Programme, from: Long = programme.start): Boolean {
+        val now = System.currentTimeMillis()
+        if (!Catchup.covers(ch, from, now)) return false
+        val url = Catchup.url(ch, from, programme.stop, now, store.zoneFor(ch)) ?: return false
+        if (current?.id != ch.id) { previous = current; zapList = guideChannels.ifEmpty { zapList } }
+        current = ch
+        archive = ArchivePlay(ch, programme.title, programme.start, programme.stop, from)
+        player.playArchive(ch, url)
+        panel = Panel.NONE
+        bannerTick++
+        return true
+    }
+
+    /** Skips within the recording by asking the provider for it again from a new moment. */
+    private fun seekArchive(deltaMs: Long) {
+        val a = archive ?: return
+        val now = System.currentTimeMillis()
+        val target = (a.from + player.positionMs + deltaMs).coerceAtLeast(a.start)
+        if (target >= minOf(a.stop, now) - 10_000) { backToLive(); return }
+        playArchive(a.channel, Programme(a.start, a.stop, a.title), from = target)
+    }
+
+    fun backToLive() {
+        val ch = archive?.channel ?: current ?: return
+        tune(ch, zapList.ifEmpty { index.all })
+    }
+
 
     /** Reads what the launcher asked for: a channel to tune to and/or a panel to open. */
     fun request(intent: Intent?) {
@@ -42,6 +88,7 @@ class LiveTvSession(val store: LiveTvStore, val player: LivePlayer) {
         pendingPanel = when (intent?.getStringExtra(EXTRA_OPEN)) {
             OPEN_CHANNELS -> Panel.CHANNELS
             OPEN_PLAYLISTS -> Panel.PLAYLISTS
+            OPEN_GUIDE -> Panel.GUIDE
             else -> null
         }
     }
@@ -68,12 +115,17 @@ class LiveTvSession(val store: LiveTvStore, val player: LivePlayer) {
         }
         pendingPanel?.let { want ->
             pendingPanel = null
-            if (want == Panel.CHANNELS) openChannels() else panel = want
+            when (want) {
+                Panel.CHANNELS -> openChannels()
+                Panel.GUIDE -> openGuide()
+                else -> panel = want
+            }
         }
     }
 
     fun tune(ch: Channel, list: List<Channel>) {
         if (current != null && current?.id != ch.id) previous = current
+        archive = null
         current = ch
         zapList = list
         zapKey = groupKey
@@ -116,7 +168,10 @@ class LiveTvSession(val store: LiveTvStore, val player: LivePlayer) {
     }
 
     fun onStart() {
-        if (stopped) { stopped = false; player.resume(); bannerTick++ }
+        if (!stopped) return
+        stopped = false
+        // Coming back from another app: a recording doesn't pick up mid-way, so return to live.
+        if (archive != null) backToLive() else { player.resume(); bannerTick++ }
     }
 
     fun onStop() {
@@ -131,11 +186,29 @@ class LiveTvSession(val store: LiveTvStore, val player: LivePlayer) {
     fun handleKey(event: KeyEvent): Boolean {
         if (panel != Panel.NONE || optionsFor != null || current == null) return false
         val first = event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0
+        if (archive != null) {
+            // Watching a recording: Left/Right skip, OK pauses, Back returns to live.
+            // Holding Left/Right skips five minutes at a time.
+            val held = event.action == KeyEvent.ACTION_DOWN && event.repeatCount > 0 && event.repeatCount % 8 == 0
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_DPAD_LEFT -> { if (first) seekArchive(-60_000) else if (held) seekArchive(-300_000); return true }
+                KeyEvent.KEYCODE_DPAD_RIGHT -> { if (first) seekArchive(60_000) else if (held) seekArchive(300_000); return true }
+                KeyEvent.KEYCODE_MEDIA_REWIND -> { if (first) seekArchive(-300_000); return true }
+                KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { if (first) seekArchive(300_000); return true }
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER,
+                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+                    if (first) { player.togglePause(); bannerTick++ }
+                    return true
+                }
+                KeyEvent.KEYCODE_BACK -> { if (event.action == KeyEvent.ACTION_UP) backToLive(); return true }
+            }
+        }
         when (event.keyCode) {
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_DOWN -> if (first) zap(-1)
             KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_UP -> if (first) zap(+1)
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER,
-            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_GUIDE -> if (first) openChannels()
+            KeyEvent.KEYCODE_DPAD_LEFT -> if (first) openChannels()
+            KeyEvent.KEYCODE_GUIDE -> if (first) openGuide()
             KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_INFO -> if (first) showBanner()
             KeyEvent.KEYCODE_MENU -> if (event.action == KeyEvent.ACTION_UP) optionsFor = current
             KeyEvent.KEYCODE_LAST_CHANNEL -> if (first) recall()
@@ -149,6 +222,7 @@ class LiveTvSession(val store: LiveTvStore, val player: LivePlayer) {
         const val EXTRA_OPEN = "open"
         const val OPEN_CHANNELS = "channels"
         const val OPEN_PLAYLISTS = "playlists"
+        const val OPEN_GUIDE = "guide"
 
         /** Opens Live TV, optionally on a channel or with a panel showing. */
         fun launch(context: Context, channelId: String? = null, open: String? = null) {

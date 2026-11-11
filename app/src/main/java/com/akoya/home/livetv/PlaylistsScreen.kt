@@ -85,6 +85,9 @@ fun PlaylistsScreen(
     val state by store.state.collectAsState()
     val loading by store.loading.collectAsState()
     val errors by store.errors.collectAsState()
+    val guideErrors by store.guideErrors.collectAsState()
+    val guideLoading by store.guide.loading.collectAsState()
+    var guideFor by remember { mutableStateOf<Playlist?>(null) }
     var optionsFor by remember { mutableStateOf<Playlist?>(null) }
     var form by remember { mutableStateOf<AddForm?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
@@ -125,13 +128,30 @@ fun PlaylistsScreen(
                                 busy -> "Downloading channels…"
                                 err != null && pl.channelCount > 0 -> "Couldn't update: $err. Showing the last saved ${pl.channelCount} channels"
                                 err != null -> err
-                                pl.channelCount > 0 -> "${pl.channelCount} channels  ·  updated ${ago(pl.updatedAt)}" + if (pl.kind == PlaylistKind.XTREAM) "  ·  Xtream login" else ""
+                                pl.channelCount > 0 -> "${pl.channelCount} channels  ·  updated ${ago(pl.updatedAt)}" + when {
+                                    pl.id in guideLoading -> "  ·  downloading guide…"
+                                    guideErrors[pl.id] != null -> "  ·  guide: ${guideErrors[pl.id]}"
+                                    pl.guideCount > 0 -> "  ·  guide: ${pl.guideCount} programmes"
+                                    pl.guideUrls().isEmpty() -> "  ·  no guide link"
+                                    else -> "  ·  guide not loaded yet"
+                                }
                                 else -> "Not loaded yet"
                             },
                             value = if (pl.enabled) "On" else "Off",
                             valueColor = if (err != null && !busy) Color(0xFFE0705A) else if (pl.enabled) null else p.muted,
                             onClick = { optionsFor = pl },
                         )
+                    }
+                    item(key = "__afr") {
+                        Column {
+                            Text("PICTURE", style = AkoyaType.section, color = p.muted, modifier = Modifier.padding(top = 10.dp, bottom = 6.dp, start = 4.dp))
+                            SettingRow(
+                                title = "Auto frame rate",
+                                subtitle = "Switches the screen to suit each channel (50 Hz for Indian channels, 60 Hz for American). The picture blanks for a moment when it changes.",
+                                value = if (state.autoFrameRate) "On" else "Off",
+                                onClick = { store.setAutoFrameRate(!state.autoFrameRate) },
+                            )
+                        }
                     }
                     item(key = "__add") {
                         Column {
@@ -168,10 +188,21 @@ fun PlaylistsScreen(
             subtitle = if (pl.kind == PlaylistKind.XTREAM) "${pl.url}  ·  ${pl.username}" else pl.url.take(70),
             onDismiss = { optionsFor = null },
             options = listOf(
-                DialogOption("Update channels now", Icons.Filled.Refresh) { store.refreshAsync(pl.id) },
+                DialogOption("Update channels and guide now", Icons.Filled.Refresh) { store.refreshAsync(pl.id) },
+                DialogOption(if (pl.guideUrl.isBlank()) "Set a guide link" else "Change the guide link", Icons.Filled.Link) { guideFor = pl },
                 DialogOption(if (pl.enabled) "Switch off" else "Switch on", if (pl.enabled) Icons.Filled.VisibilityOff else Icons.Filled.Visibility) { store.setEnabled(pl.id, !pl.enabled) },
                 DialogOption("Remove", Icons.Filled.Delete) { store.remove(pl.id) },
             ),
+        )
+    }
+
+    guideFor?.let { pl ->
+        FieldsDialog(
+            title = "Guide link for ${pl.name}",
+            subtitle = "An XMLTV link (.xml or .xml.gz) from your provider. Leave it empty to use the one the playlist names, if any.",
+            fields = listOf(Field("Guide link (http…)", KeyboardType.Uri, pl.guideUrl)),
+            onDismiss = { guideFor = null },
+            onDone = { v -> message = runCatching { store.setGuideUrl(pl.id, v[0]) }.exceptionOrNull()?.message },
         )
     }
 
@@ -226,7 +257,7 @@ private fun ago(time: Long): String {
     }
 }
 
-private data class Field(val label: String, val keyboard: KeyboardType = KeyboardType.Text)
+private data class Field(val label: String, val keyboard: KeyboardType = KeyboardType.Text, val initial: String = "")
 
 /** A small form: one text box per field, Save and Cancel. */
 @Composable
@@ -238,7 +269,7 @@ private fun FieldsDialog(
     onDismiss: () -> Unit,
 ) {
     val p = LocalPalette.current
-    val values = remember { mutableStateListOf<String>().apply { repeat(fields.size) { add("") } } }
+    val values = remember { mutableStateListOf<String>().apply { fields.forEach { add(it.initial) } } }
     val submit = { onDone(values.map { it.trim() }); onDismiss() }
     AkoyaDialog(title = title, subtitle = subtitle, onDismiss = onDismiss, wide = true) {
         val fr = rememberInitialFocus()

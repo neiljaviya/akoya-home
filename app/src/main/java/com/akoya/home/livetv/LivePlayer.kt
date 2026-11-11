@@ -63,8 +63,33 @@ class LivePlayer(context: Context) {
     var onBackup by mutableStateOf(false)
         private set
 
+    /** True while a catch-up recording is playing instead of the live channel. */
+    var archive by mutableStateOf(false)
+        private set
+
+    var paused by mutableStateOf(false)
+        private set
+
+    /** The video's frame rate once it has been measured (e.g. 25.0); 0 until then. */
+    var fps by mutableFloatStateOf(0f)
+        private set
+
     /** Told once per tune whether the channel ended up playing. */
     var onResult: ((channelId: String, played: Boolean) -> Unit)? = null
+
+    /** A catch-up recording played to its end. */
+    var onArchiveEnded: (() -> Unit)? = null
+
+    /** The frame rate of what's playing became known. */
+    var onFrameRate: ((Float) -> Unit)? = null
+
+    /** How far into the current stream playback is, in milliseconds. */
+    val positionMs: Long get() = exo.currentPosition.coerceAtLeast(0)
+
+    // Frame timestamps for measuring the frame rate; written on the playback thread.
+    private val stamps = LongArray(48)
+    @Volatile private var stampCount = 0
+    @Volatile private var fpsKnown = true
 
     private var channel: Channel? = null
     private var links: List<Channel> = emptyList()
@@ -87,6 +112,17 @@ class LivePlayer(context: Context) {
 
     init {
         exo.playWhenReady = true
+        exo.setVideoFrameMetadataListener { presentationTimeUs, _, format, _ ->
+            if (fpsKnown) return@setVideoFrameMetadataListener
+            val n = stampCount
+            if (n < stamps.size) { stamps[n] = presentationTimeUs; stampCount = n + 1 }
+            if (n + 1 >= stamps.size) {
+                fpsKnown = true
+                val measured = FrameRate.fromTimestamps(stamps, stamps.size)
+                val rate = if (measured > 0f) measured else FrameRate.snap(format.frameRate)
+                if (rate > 0f) handler.post { fps = rate; onFrameRate?.invoke(rate) }
+            }
+        }
         exo.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 when (playbackState) {
@@ -101,7 +137,7 @@ class LivePlayer(context: Context) {
                         retries = 0
                         report(true)
                     }
-                    Player.STATE_ENDED -> retryOrGiveUp("The stream stopped")
+                    Player.STATE_ENDED -> if (archive) onArchiveEnded?.invoke() else retryOrGiveUp("The stream stopped")
                     else -> Unit
                 }
             }
@@ -147,7 +183,27 @@ class LivePlayer(context: Context) {
         reported = false
         quality = ""
         onBackup = false
+        archive = false
         beginLink()
+    }
+
+    /** Plays a recording of [ch] from the provider's archive. [url] is the catch-up link. */
+    fun playArchive(ch: Channel, url: String) {
+        cancelPending()
+        channel = ch
+        links = listOf(ch.copy(url = url))
+        linkIndex = 0
+        // A recording that won't play says nothing about whether the live channel works.
+        reported = true
+        quality = ""
+        onBackup = false
+        archive = true
+        beginLink()
+    }
+
+    fun togglePause() {
+        exo.playWhenReady = !exo.playWhenReady
+        paused = !exo.playWhenReady
     }
 
     /** Stops the stream (the TV went to another app); [resume] tunes back in. */
@@ -160,7 +216,7 @@ class LivePlayer(context: Context) {
 
     fun resume() {
         val ch = channel ?: return
-        play(ch, links.drop(1))
+        if (!archive) play(ch, links.drop(1))
     }
 
     fun release() {
@@ -199,6 +255,10 @@ class LivePlayer(context: Context) {
         val sources = DefaultMediaSourceFactory(DefaultDataSource.Factory(appContext, http))
         val item = MediaItem.Builder().setUri(link.url).apply { if (asHls) setMimeType(MimeTypes.APPLICATION_M3U8) }.build()
         status = PlayStatus.Loading
+        paused = false
+        fps = 0f
+        stampCount = 0
+        fpsKnown = false
         exo.setMediaSource(sources.createMediaSource(item))
         exo.prepare()
         exo.playWhenReady = true
@@ -233,7 +293,7 @@ class LivePlayer(context: Context) {
             beginLink()
         } else {
             exo.stop()
-            status = PlayStatus.Failed(message)
+            status = PlayStatus.Failed(if (archive) "This programme isn't available on catch-up" else message)
             report(false)
         }
     }
