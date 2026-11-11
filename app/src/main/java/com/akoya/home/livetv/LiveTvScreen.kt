@@ -252,14 +252,17 @@ private fun ChannelPanel(session: LiveTvSession, index: ChannelIndex, favorites:
         CompositionLocalProvider(LocalBringIntoViewSpec provides ListScrollSpec) {
             Column(Modifier.width(236.dp)) {
                 Text("LIVE TV", style = AkoyaType.section, color = p.accent, modifier = Modifier.padding(start = 14.dp, bottom = 12.dp))
-                LazyColumn(state = groupState, modifier = Modifier.weight(1f).focusRestorer { currentGroup }.focusGroup(), verticalArrangement = Arrangement.spacedBy(2.dp), contentPadding = PaddingValues(bottom = 12.dp)) {
+                LazyColumn(state = groupState, modifier = Modifier.weight(1f).focusRestorer { if (groupState.layoutInfo.visibleItemsInfo.any { it.key == session.groupKey }) currentGroup else FocusRequester.Default }.focusGroup(), verticalArrangement = Arrangement.spacedBy(2.dp), contentPadding = PaddingValues(bottom = 12.dp)) {
                     itemsIndexed(groupRows, key = { _, g -> g.key }) { _, g ->
                         val selected = g.key == session.groupKey
+                        // Every row always carries a requester, so selecting a row never reshapes
+                        // its modifier chain (which could drop focus mid-press).
+                        val own = remember { FocusRequester() }
                         PanelRow(
                             selected = selected,
                             onClick = { session.groupKey = g.key },
                             onFocus = { session.groupKey = g.key },
-                            modifier = if (selected) Modifier.focusRequester(currentGroup) else Modifier,
+                            modifier = Modifier.focusRequester(if (selected) currentGroup else own),
                         ) { fg, sub ->
                             if (g.key == GROUP_FAV) {
                                 Icon(Icons.Filled.Star, null, tint = fg, modifier = Modifier.size(16.dp))
@@ -298,11 +301,12 @@ private fun ChannelPanel(session: LiveTvSession, index: ChannelIndex, favorites:
                 LazyColumn(state = listState, modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp), contentPadding = PaddingValues(bottom = 40.dp)) {
                     itemsIndexed(list, key = { _, c -> c.id }) { _, ch ->
                         val playing = ch.id == session.current?.id
+                        val own = remember { FocusRequester() }
                         PanelRow(
                             selected = playing,
                             onClick = { session.tune(ch, list); session.panel = Panel.NONE },
                             onLongClick = { session.optionsFor = ch },
-                            modifier = if (playing) Modifier.focusRequester(currentRow) else Modifier,
+                            modifier = Modifier.focusRequester(if (playing) currentRow else own),
                         ) { fg, sub ->
                             Text((index.numberOf[ch.id] ?: 0).toString(), style = AkoyaType.small, color = sub, modifier = Modifier.width(40.dp), maxLines = 1)
                             ChannelLogo(ch, Modifier.size(width = 46.dp, height = 28.dp))
