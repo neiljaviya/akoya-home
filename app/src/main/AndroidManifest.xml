@@ -81,6 +81,17 @@
             android:screenOrientation="landscape"
             android:windowSoftInputMode="adjustNothing" />
 
+        <!-- Film and series library from the IPTV provider. -->
+        <activity
+            android:name=".vod.VodActivity"
+            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|smallestScreenSize|uiMode|density|fontScale"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:resizeableActivity="false"
+            android:screenOrientation="landscape"
+            android:windowSoftInputMode="adjustNothing" />
+
         <service
             android:name=".dream.AkoyaDreamService"
             android:exported="true"

@@ -88,12 +88,33 @@ While watching:
 
 | Remote | What it does |
 |---|---|
-| **Up / Down** (or CH−/CH+) | Previous / next channel in the current list |
-| **OK** or **Left** | Channel list. Groups on the left, channels on the right |
-| **Hold OK** on a channel (or **Menu**) | Add to favourites, or move it up or down in favourites |
-| **CH+ / CH−** in the channel list | Skip a screenful of channels. Holding Up or Down also scrolls without animation |
-| **Right** | Show the channel banner |
-| **Back** | Close the list, or leave Live TV |
+| **Left / Right** (or CH−/CH+) | Previous / next channel in the current list |
+| **OK** | Shows the channel banner. **OK** again opens the channel list |
+| **Up / Down** | Shows the channel banner. **Up** or **Down** again opens the TV guide |
+| **Hold OK** (or **Menu**) | Options: picture quality, favourites, categories, rename, hide |
+| **Back** | Close what's open, or leave Live TV |
+
+In the channel list: groups are on the left, channels on the right. **Hold OK** on a channel or on a group for its options. **CH+ / CH−** skip a screenful, and holding Up or Down scrolls without animation.
+
+### Managing a big channel list
+
+**Manage channels** (bottom of the channel list) is built for playlists with thousands of channels:
+
+- **Groups**: every provider group with a Shown / Hidden switch, and "Hide all groups" per playlist so you can switch everything off and bring back only what you watch.
+- **Your own categories**: make a category, then hold OK on any channel → *Add to a category*. Categories sit above the provider's groups and keep the order you give them.
+- **Rename** channels and groups, **hide** single channels, and sort channels **A to Z**.
+- **Check which channels work**: tries every link in a group, a playlist or everything, and marks the dead ones. Paid logins usually allow one connection, so those are checked one channel at a time with the picture paused; do a group at a time rather than the whole playlist.
+- **Hide channels that don't work** removes marked channels from every list instead of dimming them.
+
+### Picture quality
+
+Hold OK while watching → **Picture quality**. The limit (1080p, 720p, 480p, 360p) applies to channels that are sent in several qualities; the player then stays at or below it, which buffers less on a weak connection. Most IPTV channels are sent in one quality only, so the same menu offers other versions of the channel (for example the SD one) when your playlists have them.
+
+### Movies and series
+
+If a playlist comes from an Xtream login (or an M3U link that contains a username and password), the Live TV tab shows **Movies** and **Series** tiles. The library opens as rows of posters by category, with Recently added and Continue watching on top, search, and a "See all" tile for long rows. Series open on their seasons and episodes, and the next episode plays automatically.
+
+While a film or episode plays: OK pauses, Left/Right skip (hold to skip further), Up picks the audio track, Back returns to the library and remembers the place.
 
 If a channel's link is dead, Live TV tries the channel's other links by itself (another quality, or the same channel in another playlist) and shows **Backup link** in the banner. A channel that fails twice in a row is dimmed and marked **Not working**, and Up/Down skips it; it clears as soon as it plays again.
 
@@ -170,5 +191,8 @@ app/src/main/java/com/akoya/home/
   livetv/GuideScreen.kt      the guide grid and the now/next lookups
   livetv/Catchup.kt          builds catch-up links (Xtream, shift, append, default, Flussonic)
   livetv/FrameRate.kt        frame-rate measuring and display-rate choice
+  livetv/ManageScreen.kt     channel and group options, categories, picture quality, health check
+  vod/VodStore.kt            film and series library (Xtream API), continue watching
+  vod/VodActivity.kt         library navigation and the film player; VodScreens.kt is the UI
   livetv/LiveTvLauncher.kt   the Live TV tab and the Home section
 ```

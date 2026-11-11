@@ -29,6 +29,15 @@ import java.util.UUID
 
 enum class PlaylistKind { M3U, XTREAM }
 
+/** A provider account that offers the Xtream API (films, series, guide) alongside live channels. */
+class XtreamAccount(val playlistId: String, val name: String, val base: String, val user: String, val pass: String) {
+    private val u = URLEncoder.encode(user, "UTF-8")
+    private val p = URLEncoder.encode(pass, "UTF-8")
+    fun api(action: String) = "$base/player_api.php?username=$u&password=$p&action=$action"
+    fun movieUrl(id: String, ext: String) = "$base/movie/$u/$p/$id.${ext.ifBlank { "mp4" }}"
+    fun episodeUrl(id: String, ext: String) = "$base/series/$u/$p/$id.${ext.ifBlank { "mp4" }}"
+}
+
 /** Progress of a channel health check. */
 data class HealthRun(val label: String, val done: Int, val total: Int, val bad: Int, val running: Boolean)
 
@@ -375,6 +384,24 @@ class LiveTvStore private constructor(private val context: Context) {
             if (count > 0) updateState { it.copy(failing = it.failing - channelId) }
         } else if (count < 9) {
             updateState { it.copy(failing = it.failing + (channelId to count + 1)) }
+        }
+    }
+
+    /**
+     * Logins that can also list films and series. An Xtream login can; so can an M3U link of
+     * the usual "get.php?username=…&password=…" kind, which is the same account underneath.
+     */
+    fun xtreamAccounts(): List<XtreamAccount> = current.playlists.filter { it.enabled }.mapNotNull { p ->
+        when {
+            p.kind == PlaylistKind.XTREAM -> XtreamAccount(p.id, p.name, p.url, p.username, p.password)
+            "username=" in p.url && "password=" in p.url -> runCatching {
+                val u = Uri.parse(p.url)
+                val user = u.getQueryParameter("username").orEmpty()
+                val pass = u.getQueryParameter("password").orEmpty()
+                if (user.isBlank() || pass.isBlank() || u.host.isNullOrBlank()) null
+                else XtreamAccount(p.id, p.name, u.scheme + "://" + u.host + (if (u.port > 0) ":" + u.port else ""), user, pass)
+            }.getOrNull()
+            else -> null
         }
     }
 

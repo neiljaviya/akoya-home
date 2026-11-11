@@ -17,6 +17,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.FormatListBulleted
 import androidx.compose.material.icons.filled.LiveTv
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -45,19 +47,20 @@ import com.akoya.home.ui.theme.LocalPalette
 private const val ROW_LIMIT = 30
 
 /** What the launcher needs to draw Live TV rows: favourites, recent state and counts. */
-private class LiveSummary(val favorites: List<Channel>, val last: Channel?, val channelCount: Int, val playlistCount: Int)
+private class LiveSummary(val favorites: List<Channel>, val last: Channel?, val channelCount: Int, val playlistCount: Int, val hasLibrary: Boolean)
 
 @Composable
 private fun rememberLiveSummary(): LiveSummary {
     val store = LiveTvStore.get(LocalContext.current)
     val index by store.index.collectAsState()
     val state by store.state.collectAsState()
-    return remember(index, state.favorites, state.lastChannelId, state.playlists.size) {
+    return remember(index, state.favorites, state.lastChannelId, state.playlists) {
         LiveSummary(
             favorites = state.favorites.mapNotNull { index.byId[it] },
             last = state.lastChannelId?.let { index.byId[it] },
             channelCount = index.all.size,
             playlistCount = state.playlists.size,
+            hasLibrary = store.xtreamAccounts().isNotEmpty(),
         )
     }
 }
@@ -123,6 +126,15 @@ private fun LazyListScope.liveActions(ctx: android.content.Context, s: LiveSumma
         }
         item(key = "__list") {
             ActionCard("All channels", Icons.Filled.FormatListBulleted, width, null) { LiveTvSession.launch(ctx, open = LiveTvSession.OPEN_CHANNELS) }
+        }
+    }
+    // Films and series, when a playlist's provider has a library.
+    if (s.hasLibrary) {
+        item(key = "__movies") {
+            ActionCard("Movies", Icons.Filled.Movie, width, null) { com.akoya.home.vod.VodActivity.launch(ctx, com.akoya.home.vod.VodKind.MOVIES) }
+        }
+        item(key = "__series") {
+            ActionCard("Series", Icons.Filled.VideoLibrary, width, null) { com.akoya.home.vod.VodActivity.launch(ctx, com.akoya.home.vod.VodKind.SERIES) }
         }
     }
     item(key = "__playlists") {
