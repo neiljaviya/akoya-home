@@ -115,6 +115,8 @@ class CompanionServer private constructor(private val ctx: Context) : NanoHTTPD(
                     json(Response.Status.BAD_REQUEST, JSONObject().put("error", e.message ?: "Couldn't use that link"))
                 }
             }
+            path == "/livetv/export" && m == Method.GET ->
+                LiveTvStore.get(ctx).exportCsv().let { f -> fileResponse(f).also { it.addHeader("Content-Disposition", "attachment; filename=\"${f.name}\"") } }
             // The film or series library as a spreadsheet file, for sorting it out on a computer.
             path == "/vod/export" && m == Method.GET -> {
                 val kind = if (param(s, "kind") == "series") com.akoya.home.vod.VodKind.SERIES else com.akoya.home.vod.VodKind.MOVIES

@@ -439,6 +439,33 @@ class LiveTvStore private constructor(private val context: Context) {
         return account
     }
 
+    /** Every channel, shown or hidden, as a spreadsheet file (CSV) for sorting out on a computer. */
+    fun exportCsv(): File {
+        val s = current
+        val index = _index.value
+        val names = s.playlists.associate { it.id to it.name }
+        val inCategories = HashMap<String, MutableList<String>>()
+        for (c in s.categories) for (id in c.channels) inCategories.getOrPut(id) { ArrayList(1) }.add(c.name)
+        val file = File(context.cacheDir, "akoya-channels.csv")
+        fun cell(v: String) = "\"" + v.replace("\"", "\"\"") + "\""
+        file.bufferedWriter().use { w ->
+            w.write("\uFEFFNumber,Name,Your name,Group,Playlist,Guide id,Shown,Favourite,Your categories,Catch-up days,Not working,Id\n")
+            val all = synchronized(lock) { s.playlists.flatMap { byPlaylist[it.id].orEmpty() } }
+            for (c in all) {
+                val shown = c.id in index.byId
+                w.write(
+                    listOf(
+                        index.numberOf[c.id]?.toString().orEmpty(), cell(c.name), cell(s.renames[c.id].orEmpty()), cell(c.group), cell(names[c.playlistId].orEmpty()),
+                        cell(c.tvgId), if (shown) "yes" else "no", if (c.id in s.favorites) "yes" else "", cell(inCategories[c.id]?.joinToString("; ").orEmpty()),
+                        if (c.catchupDays > 0) c.catchupDays.toString() else "", if (s.isOffAir(c.id)) "yes" else "", cell(c.id),
+                    ).joinToString(","),
+                )
+                w.write("\n")
+            }
+        }
+        return file
+    }
+
     // ------------------------------------------------------------------ replacing a source
 
     /** A one-line result of the last source replacement, for the screen to show. */

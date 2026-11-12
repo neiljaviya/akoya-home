@@ -133,14 +133,30 @@ fun VodRoot(session: VodSession, configStore: ConfigStore, onExit: () -> Unit) {
 
 /** The library of the kind being browsed; null while it loads. */
 @Composable
-private fun rememberCatalog(session: VodSession, reload: Int = 0) =
-    produceState<Result<VodCatalog>?>(null, session.kind, reload) {
-        value = null
-        value = session.store.catalog(session.kind, force = reload > 0)
+private fun rememberCatalog(session: VodSession, reload: Int = 0): androidx.compose.runtime.State<Result<VodCatalog>?> {
+    // A re-sort (new genres learned) bumps the revision, which fetches the library again.
+    val revision by session.store.revision.collectAsState()
+    val last = remember { arrayOf<Any>(session.kind, reload) }
+    return produceState<Result<VodCatalog>?>(null, session.kind, reload, revision) {
+        val force = reload != last[1]
+        // Switching between films and series, or asking for an update, shows the loading state.
+        if (force || session.kind != last[0]) value = null
+        last[0] = session.kind; last[1] = reload
+        value = session.store.catalog(session.kind, force)
     }
+}
+
+/** All · Hollywood · Bollywood · South · Gujarati · Rest. */
+@Composable
+private fun RegionChips(session: VodSession, current: Region?) {
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        TvButton("All", selected = current == null, compact = true, onClick = { session.store.setRegion(null) })
+        Region.entries.forEach { r -> TvButton(r.label, selected = current == r, compact = true, onClick = { session.store.setRegion(r) }) }
+    }
+}
 
 private fun playableFor(session: VodSession, item: VodItem, url: String) =
-    Playable(item.key, item.name, "", item.poster, url, series = false, titleKey = item.titleKey, category = session.store.categoryName(session.kind, item))
+    Playable(item.key, item.title, "", item.poster, url, series = false, titleKey = item.titleKey, category = session.store.categoryName(session.kind, item))
 
 // ------------------------------------------------------------------------------------------ home
 
@@ -159,7 +175,7 @@ private fun BrowseScreen(session: VodSession) {
     val continuing = remember(resumes, kind) { resumes.filter { it.series == (kind == VodKind.SERIES) } }
     // Picking the rows looks through the whole library, so it happens off the main thread.
     val rows by produceState(emptyList<VodRow>(), catalog, prefs) {
-        value = if (catalog == null) emptyList() else withContext(Dispatchers.Default) { store.homeRows(catalog, prefs) }
+        value = if (catalog == null) emptyList() else withContext(Dispatchers.Default) { store.homeRows(catalog, prefs, prefs.regionOrNull) }
     }
     var focused by remember(kind) { mutableStateOf<VodItem?>(null) }
     var focusedRow by remember(kind) { mutableIntStateOf(-1) }
@@ -173,7 +189,7 @@ private fun BrowseScreen(session: VodSession) {
     }
 
     Column(Modifier.fillMaxSize()) {
-        Box(Modifier.fillMaxWidth().height(206.dp)) {
+        Box(Modifier.fillMaxWidth().height(244.dp)) {
             focused?.poster?.takeIf { it.isNotBlank() }?.let {
                 AsyncImage(model = it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().alpha(0.22f))
             }
@@ -187,16 +203,18 @@ private fun BrowseScreen(session: VodSession) {
                     TvButton("Search", icon = Icons.Filled.Search, onClick = { searching = true })
                     TvButton("Update", icon = Icons.Filled.Refresh, onClick = { reload++ })
                 }
-                Spacer(Modifier.height(14.dp))
+                Spacer(Modifier.height(8.dp))
+                RegionChips(session, prefs.regionOrNull)
+                Spacer(Modifier.height(12.dp))
                 val f = focused
                 if (f != null) {
-                    Text(f.name, style = AkoyaType.title.copy(fontSize = AkoyaType.title.fontSize * 1.25f), color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    val meta = listOfNotNull(f.year.ifBlank { null }, f.rating.ifBlank { null }?.let { "★ $it" }, if (f.titleKey in prefs.myList) "On my list" else null).joinToString("   ·   ")
+                    Text(f.title, style = AkoyaType.title.copy(fontSize = AkoyaType.title.fontSize * 1.25f), color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    val meta = listOfNotNull(f.year.ifBlank { null }, f.rating.ifBlank { null }?.let { "★ $it" }, f.genres.take(3).joinToString(", ").ifBlank { null }, if (f.titleKey in prefs.myList) "On my list" else null).joinToString("   ·   ")
                     if (meta.isNotEmpty()) Text(meta, style = AkoyaType.label, color = p.accent)
                     Text(f.plot.ifBlank { "OK  open   ·   Hold OK  add to my list" }, style = AkoyaType.body, color = p.muted, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth(0.7f))
                 } else {
                     Text(kind.label, style = AkoyaType.title.copy(fontSize = AkoyaType.title.fontSize * 1.25f), color = p.text)
-                    catalog?.let { Text("${it.items.size} titles in ${it.categories.size} categories", style = AkoyaType.label, color = p.muted) }
+                    catalog?.let { Text("${it.titles(prefs.regionOrNull).size} titles" + (prefs.regionOrNull?.let { r -> " in ${r.label}" } ?: ""), style = AkoyaType.label, color = p.muted) }
                 }
             }
         }
@@ -231,7 +249,7 @@ private fun BrowseScreen(session: VodSession) {
                             SectionHeader(row.title)
                             TvLazyRow {
                                 items(row.items, key = { it.key }) { item ->
-                                    PosterCard(item.poster, item.name, POSTER_W, onFocus = { focused = item }, onLongClick = { store.toggleMyList(item) }) { session.open(VodScreen.Detail(item)) }
+                                    PosterCard(item.poster, item.title, POSTER_W, onFocus = { focused = item }, onLongClick = { store.toggleMyList(item) }) { session.open(VodScreen.Detail(item)) }
                                 }
                                 if (row.all.size > row.items.size) item(key = "__all") {
                                     TvCard(width = POSTER_W, height = POSTER_W * 1.5f, onClick = { session.open(VodScreen.Grid(row.title, row.all)) }) {
@@ -247,7 +265,7 @@ private fun BrowseScreen(session: VodSession) {
                     }
                     item(key = "__more") {
                         Row(Modifier.padding(start = 56.dp, top = 22.dp)) {
-                            TvButton("All ${catalog.categories.size} categories", icon = Icons.Filled.Category, onClick = { session.open(VodScreen.Categories) })
+                            TvButton("Genres, years and collections", icon = Icons.Filled.Category, onClick = { session.open(VodScreen.Categories) })
                         }
                     }
                 }
@@ -263,10 +281,9 @@ private fun BrowseScreen(session: VodSession) {
             onDismiss = { searching = false },
             onDone = { v ->
                 val q = v[0].trim().lowercase()
-                val all = catalog?.items
+                val all = catalog?.titles(null)
                 if (q.length >= 2 && all != null) {
-                    // The same film often sits in several categories: show it once.
-                    session.open(VodScreen.Grid("Results for \"${v[0].trim()}\"", all.filter { q in it.name.lowercase() }.distinctBy { it.titleKey }.take(300)))
+                    session.open(VodScreen.Grid("Results for \"${v[0].trim()}\"", all.filter { q in it.title.lowercase() }.take(300)))
                 }
             },
         )
@@ -310,7 +327,9 @@ private fun PosterCard(
 
 // ------------------------------------------------------------------------------------------ categories
 
-/** Every category as a tile, filed under 4K, language, year, era, kids and collections. */
+private class Tile(val key: String, val title: String, val items: List<VodItem>, val category: VodCategory? = null)
+
+/** Genres, years and the provider's collections as tiles, for the region being browsed. */
 @Composable
 private fun CategoriesScreen(session: VodSession) {
     val p = LocalPalette.current
@@ -318,29 +337,44 @@ private fun CategoriesScreen(session: VodSession) {
     val result by rememberCatalog(session)
     val catalog = result?.getOrNull()
     val prefs by store.prefs.collectAsState()
+    val tagging by store.tagging.collectAsState()
+    val region = prefs.regionOrNull
     var menuFor by remember { mutableStateOf<VodCategory?>(null) }
     val first = remember { FocusRequester() }
-    val sections = remember(catalog, prefs.hidden, prefs.pinned) {
-        val all = catalog?.categories.orEmpty()
-        val shown = all.filter { it.prefKey !in prefs.hidden }
-        buildList {
-            val pinned = prefs.pinned.mapNotNull { k -> shown.firstOrNull { it.prefKey == k } }
-            if (pinned.isNotEmpty()) add("On your home screen" to pinned)
-            for (f in Facet.entries) {
-                // Year and language shelves read best newest first; the rest keep the provider's order.
-                val list = shown.filter { it.facet == f }.let { l -> if (f == Facet.YEAR || f == Facet.LANGUAGE) l.sortedWith(compareByDescending<VodCategory> { it.year }.thenBy { it.display.lowercase() }) else l }
-                if (list.isNotEmpty()) add(f.title to list)
-            }
-            val hidden = all.filter { it.prefKey in prefs.hidden }
-            if (hidden.isNotEmpty()) add("Hidden" to hidden)
+    val sections by produceState(emptyList<Pair<String, List<Tile>>>(), catalog, region, prefs.hidden, prefs.pinned) {
+        value = if (catalog == null) emptyList() else withContext(Dispatchers.Default) {
+            val collections = catalog.collections(region)
+            buildList {
+                add("Genres" to catalog.genreShelves(region).map { Tile(it.key, it.name, it.items) })
+                add("By year" to catalog.yearShelves(region).map { Tile(it.key, it.name, it.items) })
+                add("Collections" to collections.filter { it.first.prefKey !in prefs.hidden }.map { (c, list) -> Tile("c:" + c.key, c.display, list, c) })
+                add("Hidden" to collections.filter { it.first.prefKey in prefs.hidden }.map { (c, list) -> Tile("h:" + c.key, c.display, list, c) })
+            }.filter { it.second.isNotEmpty() }
         }
     }
+    val untagged = remember(catalog, region) { catalog?.untagged(region) ?: 0 }
     LaunchedEffect(catalog != null) { if (catalog != null) { delay(150); runCatching { first.requestFocus() } } }
 
-    Column(Modifier.fillMaxSize().padding(top = 30.dp)) {
-        Text(session.kind.label.uppercase(), style = AkoyaType.section, color = p.accent, modifier = Modifier.padding(start = 56.dp))
-        Text("Categories", style = AkoyaType.title, color = p.text, modifier = Modifier.padding(start = 56.dp))
-        Text("OK  open   ·   Hold OK  pin to the home screen, or hide", style = AkoyaType.small, color = p.muted, modifier = Modifier.padding(start = 56.dp, bottom = 6.dp))
+    Column(Modifier.fillMaxSize().padding(top = 26.dp)) {
+        Column(Modifier.padding(start = 56.dp, end = 56.dp)) {
+            Text(session.kind.label.uppercase(), style = AkoyaType.section, color = p.accent)
+            Text("Browse" + (region?.let { "  ·  ${it.label}" } ?: ""), style = AkoyaType.title, color = p.text)
+            Spacer(Modifier.height(6.dp))
+            RegionChips(session, region)
+            if (session.kind == VodKind.MOVIES && catalog != null) {
+                Spacer(Modifier.height(8.dp))
+                val t = tagging
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (t != null && t.running) {
+                        TvButton("Stop tagging", compact = true, onClick = { store.stopTagging() })
+                        Text("Looking up genres: ${t.done} of ${t.total}, ${t.found} tagged. It carries on while you browse.", style = AkoyaType.small, color = p.muted)
+                    } else if (untagged > 0) {
+                        TvButton("Tag more films by genre", compact = true, onClick = { store.tagGenres(region) })
+                        Text("$untagged films here have no genre yet. This asks the provider about each, about one a second.", style = AkoyaType.small, color = p.muted)
+                    }
+                }
+            }
+        }
         if (catalog == null) {
             Text(if (result == null) "Loading…" else result?.exceptionOrNull()?.message ?: "The library couldn't be loaded.", style = AkoyaType.body, color = p.muted, modifier = Modifier.padding(start = 56.dp, top = 12.dp))
             return@Column
@@ -348,25 +382,25 @@ private fun CategoriesScreen(session: VodSession) {
         LazyVerticalGrid(
             columns = GridCells.Fixed(4),
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 56.dp, end = 56.dp, top = 8.dp, bottom = 80.dp),
+            contentPadding = PaddingValues(start = 56.dp, end = 56.dp, top = 12.dp, bottom = 80.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             sections.forEachIndexed { si, (title, list) ->
-                item(key = "h:$title", span = { GridItemSpan(maxLineSpan) }) {
-                    Text("${title.uppercase()}  ·  ${list.size}", style = AkoyaType.section, color = p.muted, modifier = Modifier.padding(top = if (si == 0) 0.dp else 12.dp))
+                item(key = "head:$title", span = { GridItemSpan(maxLineSpan) }) {
+                    Text(title.uppercase() + if (title == "Collections") "  ·  HOLD OK TO PIN OR HIDE" else "", style = AkoyaType.section, color = p.muted, modifier = Modifier.padding(top = if (si == 0) 0.dp else 12.dp))
                 }
-                gridItemsIndexed(list, key = { _, c -> title + "/" + c.key }) { i, c ->
-                    val hidden = c.prefKey in prefs.hidden
+                gridItemsIndexed(list, key = { _, t -> t.key }) { i, t ->
+                    val c = t.category
                     TvCard(
                         width = 200.dp, height = 66.dp, corner = 12.dp,
-                        onClick = { session.open(VodScreen.Grid(c.display, c.items)) },
-                        onLongClick = { menuFor = c },
+                        onClick = { session.open(VodScreen.Grid(t.title + (region?.let { "  ·  ${it.label}" } ?: ""), t.items)) },
+                        onLongClick = if (c != null) ({ menuFor = c }) else null,
                         focusRequester = if (si == 0 && i == 0) first else null,
                     ) {
-                        Column(Modifier.align(Alignment.CenterStart).padding(horizontal = 14.dp).alpha(if (hidden) 0.5f else 1f)) {
-                            Text(c.display, style = AkoyaType.label, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text("${c.items.size} titles" + if (c.prefKey in prefs.pinned) "  ·  pinned" else "", style = AkoyaType.small, color = p.muted, maxLines = 1)
+                        Column(Modifier.align(Alignment.CenterStart).padding(horizontal = 14.dp).alpha(if (title == "Hidden") 0.5f else 1f)) {
+                            Text(t.title, style = AkoyaType.label, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text("${t.items.size} titles" + if (c != null && c.prefKey in prefs.pinned) "  ·  pinned" else "", style = AkoyaType.small, color = p.muted, maxLines = 1)
                         }
                     }
                 }
@@ -379,11 +413,11 @@ private fun CategoriesScreen(session: VodSession) {
         val hidden = c.prefKey in prefs.hidden
         OptionsDialog(
             title = c.display,
-            subtitle = if (c.display != c.raw.trim()) "${c.raw.trim()}  ·  ${c.items.size} titles" else "${c.items.size} titles",
+            subtitle = if (c.display != c.raw.trim()) c.raw.trim() else null,
             onDismiss = { menuFor = null },
             options = buildList {
                 if (!hidden) add(DialogOption(if (pinned) "Remove from the home screen" else "Pin to the home screen", Icons.Filled.PushPin) { store.setPinned(c, !pinned) })
-                add(DialogOption(if (hidden) "Show this category" else "Hide this category", if (hidden) Icons.Filled.Visibility else Icons.Filled.VisibilityOff) { store.setHidden(c, !hidden) })
+                add(DialogOption(if (hidden) "Show this collection" else "Hide this collection", if (hidden) Icons.Filled.Visibility else Icons.Filled.VisibilityOff) { store.setHidden(c, !hidden) })
             },
         )
     }
@@ -421,8 +455,8 @@ private fun GridScreen(session: VodSession, screen: VodScreen.Grid) {
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
             gridItemsIndexed(items, key = { _, v -> v.key }) { i, item ->
-                val caption = (if (item.titleKey in prefs.myList) "✓ " else "") + item.name
-                PosterCard(item.poster, item.name, POSTER_W, caption = caption, focusRequester = if (i == 0) first else null, onLongClick = { store.toggleMyList(item) }) { session.open(VodScreen.Detail(item)) }
+                val caption = (if (item.titleKey in prefs.myList) "✓ " else "") + item.title
+                PosterCard(item.poster, item.title, POSTER_W, caption = caption, focusRequester = if (i == 0) first else null, onLongClick = { store.toggleMyList(item) }) { session.open(VodScreen.Detail(item)) }
             }
         }
     }
@@ -461,7 +495,7 @@ private fun DetailScreen(session: VodSession, item: VodItem) {
         eps.mapNotNull { e ->
             val url = store.episodeUrl(item, e) ?: return@mapNotNull null
             Playable(
-                item.key + ":" + e.id, item.name, "S$s E${e.number}" + if (e.title.isNotBlank()) "  ·  ${e.title}" else "", item.poster, url, series = true,
+                item.key + ":" + e.id, item.title, "S$s E${e.number}" + if (e.title.isNotBlank()) "  ·  ${e.title}" else "", item.poster, url, series = true,
                 titleKey = item.titleKey, category = store.categoryName(session.kind, item),
             )
         }
@@ -478,12 +512,13 @@ private fun DetailScreen(session: VodSession, item: VodItem) {
             }
             Spacer(Modifier.width(34.dp))
             Column(Modifier.weight(1f).fillMaxHeight()) {
-                Text(item.name, style = AkoyaType.title.copy(fontSize = AkoyaType.title.fontSize * 1.3f), color = p.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(item.title, style = AkoyaType.title.copy(fontSize = AkoyaType.title.fontSize * 1.3f), color = p.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 val meta = listOfNotNull(
                     (movie?.year ?: series?.year ?: item.year).ifBlank { null },
                     (movie?.rating ?: series?.rating ?: item.rating).ifBlank { null }?.let { "★ $it" },
                     movie?.duration?.ifBlank { null },
-                    (movie?.genre ?: series?.genre)?.ifBlank { null },
+                    ((movie?.genre ?: series?.genre)?.ifBlank { null } ?: item.genres.joinToString(", ").ifBlank { null }),
+                    item.region.label,
                     if (item.series && seasons.isNotEmpty()) "${seasons.size} season${if (seasons.size == 1) "" else "s"}" else null,
                 ).joinToString("   ·   ")
                 if (meta.isNotEmpty()) Text(meta, style = AkoyaType.label, color = p.accent, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))
@@ -506,6 +541,18 @@ private fun DetailScreen(session: VodSession, item: VodItem) {
                         TvButton(if (resume != null) "Resume from ${clock(resume.pos)}" else "Play", icon = Icons.Filled.PlayArrow, selected = true, focusRequester = first, onClick = { play(false) })
                         if (resume != null) TvButton("Start over", icon = Icons.Filled.Replay, onClick = { play(true) })
                         MyListButton(session, item)
+                    }
+                    // The same film filed elsewhere: usually the 4K copy or the multi-audio one.
+                    val others = remember(item.key) { store.versions(session.kind, item) }
+                    if (others.isNotEmpty()) {
+                        Text("OTHER COPIES", style = AkoyaType.section, color = p.muted, modifier = Modifier.padding(top = 14.dp, bottom = 6.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            others.forEach { (label, v) ->
+                                TvButton(label, compact = true, onClick = {
+                                    store.movieUrl(v, v.ext)?.let { url -> session.player.play(listOf(playableFor(session, v, url)), 0) }
+                                })
+                            }
+                        }
                     }
                 } else if (!loaded) {
                     CircularProgressIndicator(color = p.accent, strokeWidth = 3.dp, modifier = Modifier.size(32.dp))
