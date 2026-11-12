@@ -88,6 +88,9 @@ fun PlaylistsScreen(
     val guideErrors by store.guideErrors.collectAsState()
     val guideLoading by store.guide.loading.collectAsState()
     var guideFor by remember { mutableStateOf<Playlist?>(null) }
+    // Set while the add form is being used to swap an existing playlist's provider.
+    var replaceId by remember { mutableStateOf<String?>(null) }
+    val notice by store.notice.collectAsState()
     var optionsFor by remember { mutableStateOf<Playlist?>(null) }
     var form by remember { mutableStateOf<AddForm?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
@@ -172,6 +175,7 @@ fun PlaylistsScreen(
                                 )
                                 TvButton("Xtream login", icon = Icons.Filled.VpnKey, onClick = { form = AddForm.XTREAM })
                             }
+                            notice?.let { Text(it, style = AkoyaType.small, color = p.accent, modifier = Modifier.padding(top = 8.dp, start = 4.dp)) }
                             message?.let { Text(it, style = AkoyaType.small, color = Color(0xFFE0705A), modifier = Modifier.padding(top = 8.dp, start = 4.dp)) }
                         }
                     }
@@ -195,6 +199,8 @@ fun PlaylistsScreen(
                     session.checkChannels(pl.name, session.index.channels("p:" + pl.id, emptyList()).ifEmpty { session.index.all.filter { it.playlistId == pl.id } })
                     session.panel = Panel.MANAGE
                 },
+                DialogOption("Replace the source with a playlist link", Icons.Filled.Link) { replaceId = pl.id; form = AddForm.LINK },
+                DialogOption("Replace the source with an Xtream login", Icons.Filled.VpnKey) { replaceId = pl.id; form = AddForm.XTREAM },
                 DialogOption("Remove", Icons.Filled.Delete) { store.remove(pl.id) },
             ),
         )
@@ -215,15 +221,21 @@ fun PlaylistsScreen(
             title = "Add a playlist link",
             subtitle = "The M3U link from your provider. Typing is easier from the phone page.",
             fields = listOf(Field("Link (http…)", KeyboardType.Uri), Field("Name (optional)")),
-            onDismiss = { form = null },
-            onDone = { v -> message = runCatching { store.addM3u(v[1], v[0]) }.exceptionOrNull()?.message },
+            onDismiss = { form = null; replaceId = null },
+            onDone = { v ->
+                val target = replaceId
+                message = runCatching { if (target != null) store.replaceSource(target, v[1], v[0], "", "", "") else store.addM3u(v[1], v[0]) }.exceptionOrNull()?.message
+            },
         )
         AddForm.XTREAM -> FieldsDialog(
             title = "Add an Xtream login",
             subtitle = "The server address, username and password from your provider.",
             fields = listOf(Field("Server (http://host:port)", KeyboardType.Uri), Field("Username"), Field("Password"), Field("Name (optional)")),
-            onDismiss = { form = null },
-            onDone = { v -> message = runCatching { store.addXtream(v[3], v[0], v[1], v[2]) }.exceptionOrNull()?.message },
+            onDismiss = { form = null; replaceId = null },
+            onDone = { v ->
+                val target = replaceId
+                message = runCatching { if (target != null) store.replaceSource(target, v[3], "", v[0], v[1], v[2]) else store.addXtream(v[3], v[0], v[1], v[2]) }.exceptionOrNull()?.message
+            },
         )
         null -> Unit
     }

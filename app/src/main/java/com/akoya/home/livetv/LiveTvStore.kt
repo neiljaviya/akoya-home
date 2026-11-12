@@ -34,6 +34,7 @@ class XtreamAccount(val playlistId: String, val name: String, val base: String, 
     private val u = URLEncoder.encode(user, "UTF-8")
     private val p = URLEncoder.encode(pass, "UTF-8")
     fun api(action: String) = "$base/player_api.php?username=$u&password=$p&action=$action"
+    fun guideUrl() = "$base/xmltv.php?username=$u&password=$p"
     fun movieUrl(id: String, ext: String) = "$base/movie/$u/$p/$id.${ext.ifBlank { "mp4" }}"
     fun episodeUrl(id: String, ext: String) = "$base/series/$u/$p/$id.${ext.ifBlank { "mp4" }}"
 }
@@ -272,7 +273,10 @@ class LiveTvStore private constructor(private val context: Context) {
     /** Downloads one playlist's guide. Needs the channels loaded first, to know what to keep. */
     private fun refreshGuide(id: String) {
         val p = current.playlists.firstOrNull { it.id == id } ?: return
-        val urls = p.guideUrls()
+        // A playlist with no guide link of its own can still use its account's guide.
+        val urls = p.guideUrls().ifEmpty {
+            if (p.kind == PlaylistKind.M3U) listOfNotNull(accountFor(p)?.guideUrl()) else emptyList()
+        }
         if (urls.isEmpty() || !p.enabled) return
         // Only channels that are shown need a guide: with most groups hidden this keeps the
         // download quick and the database small.
@@ -397,18 +401,106 @@ class LiveTvStore private constructor(private val context: Context) {
      * Logins that can also list films and series. An Xtream login can; so can an M3U link of
      * the usual "get.php?username=…&password=…" kind, which is the same account underneath.
      */
-    fun xtreamAccounts(): List<XtreamAccount> = current.playlists.filter { it.enabled }.mapNotNull { p ->
-        when {
-            p.kind == PlaylistKind.XTREAM -> XtreamAccount(p.id, p.name, p.url, p.username, p.password)
-            "username=" in p.url && "password=" in p.url -> runCatching {
-                val u = Uri.parse(p.url)
-                val user = u.getQueryParameter("username").orEmpty()
-                val pass = u.getQueryParameter("password").orEmpty()
-                if (user.isBlank() || pass.isBlank() || u.host.isNullOrBlank()) null
-                else XtreamAccount(p.id, p.name, u.scheme + "://" + u.host + (if (u.port > 0) ":" + u.port else ""), user, pass)
-            }.getOrNull()
-            else -> null
+    fun xtreamAccounts(): List<XtreamAccount> = current.playlists.filter { it.enabled }.mapNotNull { accountFor(it) }
+
+    private fun accountFor(p: Playlist): XtreamAccount? = when {
+        p.kind == PlaylistKind.XTREAM -> XtreamAccount(p.id, p.name, p.url, p.username, p.password)
+        "username=" in p.url && "password=" in p.url -> runCatching {
+            val u = Uri.parse(p.url)
+            val user = u.getQueryParameter("username").orEmpty()
+            val pass = u.getQueryParameter("password").orEmpty()
+            if (user.isBlank() || pass.isBlank() || u.host.isNullOrBlank()) null
+            else XtreamAccount(p.id, p.name, u.scheme + "://" + u.host + (if (u.port > 0) ":" + u.port else ""), user, pass)
+        }.getOrNull() ?: accountFromChannels(p)
+        else -> accountFromChannels(p)
+    }
+
+    private val derivedAccounts = HashMap<String, Pair<Long, XtreamAccount?>>()
+
+    /**
+     * Some M3U links don't show the login (short links, redirects), but the channel links
+     * inside do: "http://host/live/user/pass/123.ts". When most channels agree, that's the account.
+     */
+    private fun accountFromChannels(p: Playlist): XtreamAccount? {
+        synchronized(derivedAccounts) { derivedAccounts[p.id]?.takeIf { it.first == p.updatedAt }?.let { return it.second } }
+        val sample = synchronized(lock) { byPlaylist[p.id].orEmpty() }.take(60)
+        if (sample.size < 5) return null
+        val votes = HashMap<Triple<String, String, String>, Int>()
+        for (c in sample) {
+            val m = XC_LINK.find(c.url.substringBefore('?')) ?: continue
+            val key = Triple(m.groupValues[1], m.groupValues[2], m.groupValues[3])
+            votes[key] = (votes[key] ?: 0) + 1
         }
+        val best = votes.maxByOrNull { it.value }
+        val account = if (best != null && best.value * 10 >= sample.size * 6) {
+            XtreamAccount(p.id, p.name, best.key.first, java.net.URLDecoder.decode(best.key.second, "UTF-8"), java.net.URLDecoder.decode(best.key.third, "UTF-8"))
+        } else null
+        synchronized(derivedAccounts) { derivedAccounts[p.id] = p.updatedAt to account }
+        return account
+    }
+
+    // ------------------------------------------------------------------ replacing a source
+
+    /** A one-line result of the last source replacement, for the screen to show. */
+    private val _notice = MutableStateFlow<String?>(null)
+    val notice: StateFlow<String?> = _notice.asStateFlow()
+
+    /**
+     * Points an existing playlist at a new provider and carries the arrangement over:
+     * favourites, categories, renames and hidden channels are matched to the new source's
+     * channels by guide id, then by name. Hidden and renamed groups carry over when the new
+     * provider uses the same group names. If the new source can't be loaded, nothing changes.
+     */
+    fun replaceSource(id: String, name: String, m3uUrl: String, server: String, username: String, password: String) {
+        val before = current.playlists.firstOrNull { it.id == id } ?: throw IllegalArgumentException("No such playlist")
+        val after = (if (server.isNotBlank()) {
+            var base = server.trim().trimEnd('/')
+            if (!base.startsWith("http://", true) && !base.startsWith("https://", true)) base = "http://$base"
+            runCatching { URL(base) }.getOrNull()?.let { u -> base = u.protocol + "://" + u.host + (if (u.port > 0) ":" + u.port else "") }
+            require(username.isNotBlank() && password.isNotBlank()) { "Username and password are needed" }
+            before.copy(kind = PlaylistKind.XTREAM, url = base, username = username.trim(), password = password.trim())
+        } else {
+            val clean = m3uUrl.trim()
+            require(clean.startsWith("http://", true) || clean.startsWith("https://", true)) { "The link must start with http:// or https://" }
+            before.copy(kind = PlaylistKind.M3U, url = clean, username = "", password = "")
+        }).copy(name = name.trim().ifBlank { before.name }, guideDetected = "", timezone = "", guideUpdatedAt = 0L)
+
+        scope.launch {
+            val old = synchronized(lock) { byPlaylist[id].orEmpty() }
+            updateState { s -> s.copy(playlists = s.playlists.map { if (it.id == id) after else it }) }
+            val result = refresh(id)
+            if (result.isFailure) {
+                updateState { s -> s.copy(playlists = s.playlists.map { if (it.id == id) before else it }) }
+                _notice.value = "The new source couldn't be loaded, so ${before.name} was left as it was"
+                return@launch
+            }
+            val fresh = synchronized(lock) { byPlaylist[id].orEmpty() }
+            val mapping = SourceMatch.map(old, fresh, referencedIds(id))
+            val wanted = referencedIds(id).size
+            fun move(ids: Collection<String>) = ids.mapNotNull { if (it.startsWith("$id:")) mapping[it] else it }.distinct()
+            updateState { s ->
+                s.copy(
+                    favorites = move(s.favorites),
+                    categories = s.categories.map { c -> c.copy(channels = move(c.channels)) },
+                    renames = s.renames.entries.mapNotNull { (k, v) -> (if (k.startsWith("$id:")) mapping[k] else k)?.let { it to v } }.toMap(),
+                    hiddenChannels = move(s.hiddenChannels).toSet(),
+                    lastChannelId = s.lastChannelId?.let { if (it.startsWith("$id:")) mapping[it] else it },
+                    failing = s.failing.filterKeys { !it.startsWith("$id:") },
+                )
+            }
+            publish()
+            _notice.value = "${after.name} now uses the new source. ${mapping.size} of $wanted arranged channels were found in it" +
+                if (mapping.size < wanted) "; the rest aren't offered there under a matching name" else ""
+        }
+    }
+
+    /** Channel ids of one playlist that the user's arrangement mentions. */
+    private fun referencedIds(playlistId: String): Set<String> {
+        val s = current
+        val out = LinkedHashSet<String>()
+        out += s.favorites; s.categories.forEach { out += it.channels }; out += s.renames.keys; out += s.hiddenChannels
+        s.lastChannelId?.let { out += it }
+        return out.filterTo(LinkedHashSet()) { it.startsWith("$playlistId:") }
     }
 
     // ------------------------------------------------------------------ channel management
@@ -865,6 +957,7 @@ class LiveTvStore private constructor(private val context: Context) {
     companion object {
         private const val TAG = "AkoyaLiveTv"
         private const val KEY = "state"
+        private val XC_LINK = Regex("""^(https?://[^/]+)/(?:live/)?([^/]+)/([^/]+)/\d+(?:\.\w+)?$""")
         private const val KEY_FORMAT = "cacheFormat"
         private const val CACHE_FORMAT = 2
         private const val STALE_MS = 24L * 60 * 60 * 1000
