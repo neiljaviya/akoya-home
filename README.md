@@ -112,9 +112,38 @@ Hold OK while watching → **Picture quality**. The limit (1080p, 720p, 480p, 36
 
 ### Movies and series
 
-If a playlist comes from an Xtream login (or an M3U link that contains a username and password), the Live TV tab shows **Movies** and **Series** tiles. The library opens as rows of posters by category, with Recently added and Continue watching on top, search, and a "See all" tile for long rows. Series open on their seasons and episodes, and the next episode plays automatically.
+The Live TV tab shows **Movies** and **Series** tiles when a playlist's provider has a library. That works for an Xtream login and for M3U links too: the account is read from the link, or from the channel links inside the playlist when the link itself doesn't show it.
 
-While a film or episode plays: OK pauses, Left/Right skip (hold to skip further), Up picks the audio track, Back returns to the library and remembers the place.
+**Home** is a short, curated screen instead of every category at once:
+
+- Continue watching, My list, **Recommended for you** and "Because you watched…" (from what you've watched for two minutes or more)
+- Recently added, any categories you pinned, then the provider's trending shelf, this year's shelves, 4K and kids
+- Each row shows the 30 newest titles and ends in "See all"
+
+**Categories** lists every provider category as a tile, filed under 4K, By language, By year, By era, Kids and family, and Collections, with the provider's "VOD |" prefixes tidied away. Hold OK on a tile to pin it to the home screen or hide it.
+
+Inside a category, sort by Recently added, A to Z, Top rated or Newest first. **Hold OK** on any poster to add it to My list. Search shows each title once even when it sits in several categories.
+
+Your arrangement (pinned and hidden categories, My list, viewing history) is stored by name, so it survives a change of provider.
+
+To sort the library out on a computer, the phone page (TV → Live TV playlists → Library export) downloads every title with its category, year and rating as a spreadsheet file.
+
+**While a film or episode plays**
+
+| Remote | What it does |
+|---|---|
+| **OK** | Pause or play, and bring up the controls |
+| **Left / Right** | Skip back or forward; hold to skip further |
+| **Up / Down** | Bring up the controls |
+| **Back** | Put the controls away, then return to the library (your place is remembered) |
+
+The controls: Start over, Previous and Next episode, Play/Pause, **Audio**, **Subtitles** (the ones built into the file), **Speed** (0.5× to 2×) and **Quality**. Move up to the timeline and use Left/Right to skip along it. Films from IPTV libraries are single files, so Quality usually has nothing to switch; the same title in the 4K category is the higher-quality version.
+
+### Changing provider without losing your arrangement
+
+Playlists → pick the playlist → **Replace the source** (with a link or an Xtream login), or on the phone page choose "Replace the source of…" before adding. The playlist keeps its place, and your favourites, categories, renames and hidden channels are matched to the new provider's channels: by guide id first, then by name. Hidden and renamed groups carry over when the new provider uses the same group names. If the new source can't be loaded, the playlist is left exactly as it was.
+
+Removing a playlist and adding a new one does **not** carry anything over, so use Replace.
 
 If a channel's link is dead, Live TV tries the channel's other links by itself (another quality, or the same channel in another playlist) and shows **Backup link** in the banner. A channel that fails twice in a row is dimmed and marked **Not working**, and Up/Down skips it; it clears as soon as it plays again.
 
@@ -208,7 +237,9 @@ app/src/main/java/com/akoya/home/
   livetv/Catchup.kt          builds catch-up links (Xtream, shift, append, default, Flussonic)
   livetv/FrameRate.kt        frame-rate measuring and display-rate choice
   livetv/ManageScreen.kt     channel and group options, categories, picture quality, health check
-  vod/VodStore.kt            film and series library (Xtream API), continue watching
+  livetv/SourceMatch.kt      matches arranged channels to a new provider's list
+  vod/VodStore.kt            film and series library (Xtream API), home rows, My list, continue watching
+  vod/VodSort.kt             category filing, year reading and recommendations (unit-tested)
   vod/VodActivity.kt         library navigation and the film player; VodScreens.kt is the UI
   livetv/LiveTvLauncher.kt   the Live TV tab and the Home section
 ```

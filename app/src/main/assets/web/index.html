@@ -188,7 +188,13 @@ nav button.on{color:var(--kumo)}
     <input id="liveGuide" placeholder="XMLTV link, .xml or .xml.gz" autocomplete="off" autocapitalize="off" spellcheck="false">
     <label>Name (optional)</label>
     <input id="liveName" placeholder="e.g. My provider" autocomplete="off">
+    <label>Add as</label>
+    <select id="liveReplace"><option value="">A new playlist</option></select>
+    <p class="muted">Replacing keeps your favourites, categories, renames and hidden channels, matched to the new provider's channels by name.</p>
     <div class="row" style="margin-top:14px"><span class="muted grow" id="liveState"></span><button id="liveAdd">Add playlist</button></div>
+    <label>Library export</label>
+    <div class="row"><a class="btn ghost" id="expMovies" href="#">Movies (.csv)</a><a class="btn ghost" id="expSeries" href="#">Series (.csv)</a></div>
+    <p class="muted">Every title with its category, year and rating, to open in Excel or Sheets.</p>
   </div>
   <div class="card">
     <div class="eyebrow">This phone</div>
@@ -444,14 +450,19 @@ function renderLive(d) {
   act('#liveList [data-ld]', 'ld', id => { if (!confirm('Remove this playlist from the TV?')) return api('/livetv'); return api('/livetv/remove?' + q({ id }), { method: 'POST' }); });
   act('#liveList [data-lg]', 'lg', id => { const g = prompt('TV guide (XMLTV) link for this playlist. Leave empty to use the playlist\'s own.', ''); if (g === null) return api('/livetv'); return api('/livetv/guide?' + q({ id }), { method: 'POST', body: JSON.stringify({ guide: g.trim() }) }); });
   act('#livePresets [data-lp]', 'lp', id => api('/livetv/add', { method: 'POST', body: JSON.stringify({ preset: id }) }));
+  const sel = $('#liveReplace'), keep = sel.value;
+  sel.innerHTML = '<option value="">A new playlist</option>' + d.playlists.map(p => `<option value="${p.id}">Replace the source of ${esc(p.name)}</option>`).join('');
+  sel.value = keep;
+  if (d.notice) $('#liveState').textContent = d.notice;
+  $('#expMovies').href = '/api/vod/export?' + q({ kind: 'movies', pin: PIN }); $('#expSeries').href = '/api/vod/export?' + q({ kind: 'series', pin: PIN });
   clearTimeout(liveTimer);
   if (d.playlists.some(p => p.loading || p.guideLoading)) liveTimer = setTimeout(loadLive, 2000);
 }
 async function loadLive() { try { renderLive(await api('/livetv')); } catch (e) { if (e.message !== 'PIN') $('#liveState').textContent = e.message; } }
 $('#liveAdd').onclick = async () => {
   const body = liveKind === 'link'
-    ? { name: $('#liveName').value, guide: $('#liveGuide').value.trim(), url: $('#liveUrl').value.trim() }
-    : { name: $('#liveName').value, guide: $('#liveGuide').value.trim(), server: $('#liveServer').value.trim(), username: $('#liveUser').value.trim(), password: $('#livePass').value.trim() };
+    ? { name: $('#liveName').value, replace: $('#liveReplace').value, guide: $('#liveGuide').value.trim(), url: $('#liveUrl').value.trim() }
+    : { name: $('#liveName').value, replace: $('#liveReplace').value, guide: $('#liveGuide').value.trim(), server: $('#liveServer').value.trim(), username: $('#liveUser').value.trim(), password: $('#livePass').value.trim() };
   if (liveKind === 'link' ? !body.url : !(body.server && body.username && body.password)) { toast('Fill in the ' + (liveKind === 'link' ? 'link' : 'server, username and password')); return; }
   try {
     renderLive(await api('/livetv/add', { method: 'POST', body: JSON.stringify(body) }));

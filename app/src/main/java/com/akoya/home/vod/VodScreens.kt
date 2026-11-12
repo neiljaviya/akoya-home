@@ -23,7 +23,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
 import androidx.compose.foundation.lazy.items
@@ -31,7 +34,19 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ClosedCaption
+import androidx.compose.material.icons.filled.HighQuality
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -56,7 +71,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.text.style.TextAlign
+import android.view.KeyEvent as NativeKeyEvent
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -99,6 +122,7 @@ fun VodRoot(session: VodSession, configStore: ConfigStore, onExit: () -> Unit) {
             } else {
                 when (val s = session.screen) {
                     VodScreen.Browse -> BrowseScreen(session)
+                    VodScreen.Categories -> CategoriesScreen(session)
                     is VodScreen.Grid -> GridScreen(session, s)
                     is VodScreen.Detail -> DetailScreen(session, s.item)
                 }
@@ -107,7 +131,18 @@ fun VodRoot(session: VodSession, configStore: ConfigStore, onExit: () -> Unit) {
     }
 }
 
-// ------------------------------------------------------------------------------------------ browse
+/** The library of the kind being browsed; null while it loads. */
+@Composable
+private fun rememberCatalog(session: VodSession, reload: Int = 0) =
+    produceState<Result<VodCatalog>?>(null, session.kind, reload) {
+        value = null
+        value = session.store.catalog(session.kind, force = reload > 0)
+    }
+
+private fun playableFor(session: VodSession, item: VodItem, url: String) =
+    Playable(item.key, item.name, "", item.poster, url, series = false, titleKey = item.titleKey, category = session.store.categoryName(session.kind, item))
+
+// ------------------------------------------------------------------------------------------ home
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -117,17 +152,19 @@ private fun BrowseScreen(session: VodSession) {
     val kind = session.kind
     var reload by remember { mutableIntStateOf(0) }
     var searching by remember { mutableStateOf(false) }
-    val result by produceState<Result<VodCatalog>?>(null, kind, reload) {
-        value = null
-        value = store.catalog(kind, force = reload > 0)
-    }
+    val result by rememberCatalog(session, reload)
+    val catalog = result?.getOrNull()
+    val prefs by store.prefs.collectAsState()
     val resumes by store.resumes.collectAsState()
     val continuing = remember(resumes, kind) { resumes.filter { it.series == (kind == VodKind.SERIES) } }
+    // Picking the rows looks through the whole library, so it happens off the main thread.
+    val rows by produceState(emptyList<VodRow>(), catalog, prefs) {
+        value = if (catalog == null) emptyList() else withContext(Dispatchers.Default) { store.homeRows(catalog, prefs) }
+    }
     var focused by remember(kind) { mutableStateOf<VodItem?>(null) }
     var focusedRow by remember(kind) { mutableIntStateOf(-1) }
     val listState = rememberLazyListState()
     val firstTab = remember { FocusRequester() }
-    val catalog = result?.getOrNull()
 
     LaunchedEffect(Unit) { delay(120); runCatching { firstTab.requestFocus() } }
     LaunchedEffect(focusedRow) {
@@ -136,7 +173,6 @@ private fun BrowseScreen(session: VodSession) {
     }
 
     Column(Modifier.fillMaxSize()) {
-        // ---- what's in focus, over a faded copy of its poster
         Box(Modifier.fillMaxWidth().height(206.dp)) {
             focused?.poster?.takeIf { it.isNotBlank() }?.let {
                 AsyncImage(model = it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().alpha(0.22f))
@@ -147,6 +183,7 @@ private fun BrowseScreen(session: VodSession) {
                     VodKind.entries.forEachIndexed { i, k ->
                         TvButton(k.label, selected = kind == k, focusRequester = if (i == 0) firstTab else null, onClick = { session.kind = k })
                     }
+                    TvButton("Categories", icon = Icons.Filled.Category, onClick = { session.open(VodScreen.Categories) })
                     TvButton("Search", icon = Icons.Filled.Search, onClick = { searching = true })
                     TvButton("Update", icon = Icons.Filled.Refresh, onClick = { reload++ })
                 }
@@ -154,12 +191,12 @@ private fun BrowseScreen(session: VodSession) {
                 val f = focused
                 if (f != null) {
                     Text(f.name, style = AkoyaType.title.copy(fontSize = AkoyaType.title.fontSize * 1.25f), color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    val meta = listOfNotNull(f.year.ifBlank { null }, f.rating.ifBlank { null }?.let { "★ $it" }).joinToString("   ·   ")
+                    val meta = listOfNotNull(f.year.ifBlank { null }, f.rating.ifBlank { null }?.let { "★ $it" }, if (f.titleKey in prefs.myList) "On my list" else null).joinToString("   ·   ")
                     if (meta.isNotEmpty()) Text(meta, style = AkoyaType.label, color = p.accent)
-                    if (f.plot.isNotBlank()) Text(f.plot, style = AkoyaType.body, color = p.muted, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth(0.7f))
+                    Text(f.plot.ifBlank { "OK  open   ·   Hold OK  add to my list" }, style = AkoyaType.body, color = p.muted, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth(0.7f))
                 } else {
                     Text(kind.label, style = AkoyaType.title.copy(fontSize = AkoyaType.title.fontSize * 1.25f), color = p.text)
-                    catalog?.let { Text("${it.items.size} titles", style = AkoyaType.label, color = p.muted) }
+                    catalog?.let { Text("${it.items.size} titles in ${it.categories.size} categories", style = AkoyaType.label, color = p.muted) }
                 }
             }
         }
@@ -189,23 +226,28 @@ private fun BrowseScreen(session: VodSession) {
                             }
                         }
                     }
-                    itemsIndexed(catalog.rows, key = { _, r -> r.key }) { i, row ->
+                    itemsIndexed(rows, key = { _, r -> r.key }) { i, row ->
                         Column(Modifier.onFocusChanged { if (it.hasFocus) focusedRow = i + offset }) {
-                            SectionHeader("${row.title}  ·  ${row.items.size}")
+                            SectionHeader(row.title)
                             TvLazyRow {
-                                items(row.items.take(ROW_PREVIEW), key = { it.key }) { item ->
-                                    PosterCard(item.poster, item.name, POSTER_W, onFocus = { focused = item }) { session.open(VodScreen.Detail(item)) }
+                                items(row.items, key = { it.key }) { item ->
+                                    PosterCard(item.poster, item.name, POSTER_W, onFocus = { focused = item }, onLongClick = { store.toggleMyList(item) }) { session.open(VodScreen.Detail(item)) }
                                 }
-                                if (row.items.size > ROW_PREVIEW) item(key = "__all") {
-                                    TvCard(width = POSTER_W, height = POSTER_W * 1.5f, onClick = { session.open(VodScreen.Grid(row.title, row.items)) }) {
+                                if (row.all.size > row.items.size) item(key = "__all") {
+                                    TvCard(width = POSTER_W, height = POSTER_W * 1.5f, onClick = { session.open(VodScreen.Grid(row.title, row.all)) }) {
                                         Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
                                             Icon(Icons.Filled.GridView, contentDescription = null, tint = p.accent, modifier = Modifier.size(26.dp))
                                             Spacer(Modifier.height(6.dp))
-                                            Text("See all ${row.items.size}", style = AkoyaType.small, color = p.text)
+                                            Text("See all ${row.all.size}", style = AkoyaType.small, color = p.text)
                                         }
                                     }
                                 }
                             }
+                        }
+                    }
+                    item(key = "__more") {
+                        Row(Modifier.padding(start = 56.dp, top = 22.dp)) {
+                            TvButton("All ${catalog.categories.size} categories", icon = Icons.Filled.Category, onClick = { session.open(VodScreen.Categories) })
                         }
                     }
                 }
@@ -223,7 +265,8 @@ private fun BrowseScreen(session: VodSession) {
                 val q = v[0].trim().lowercase()
                 val all = catalog?.items
                 if (q.length >= 2 && all != null) {
-                    session.open(VodScreen.Grid("Results for \"${v[0].trim()}\"", all.filter { q in it.name.lowercase() }.take(300)))
+                    // The same film often sits in several categories: show it once.
+                    session.open(VodScreen.Grid("Results for \"${v[0].trim()}\"", all.filter { q in it.name.lowercase() }.distinctBy { it.titleKey }.take(300)))
                 }
             },
         )
@@ -240,6 +283,7 @@ private fun PosterCard(
     caption: String? = null,
     focusRequester: FocusRequester? = null,
     onFocus: (() -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     val p = LocalPalette.current
@@ -247,7 +291,7 @@ private fun PosterCard(
     var load by remember(poster) { mutableStateOf(!ScrollPace.fast) }
     if (!load) LaunchedEffect(poster) { delay(260); load = true }
     Column(Modifier.width(width)) {
-        TvCard(width = width, height = width * 1.5f, onClick = onClick, focusRequester = focusRequester, onFocus = { if (it) onFocus?.invoke() }, corner = 10.dp) {
+        TvCard(width = width, height = width * 1.5f, onClick = onClick, onLongClick = onLongClick, focusRequester = focusRequester, onFocus = { if (it) onFocus?.invoke() }, corner = 10.dp) {
             Text(title, style = AkoyaType.small, color = p.muted, maxLines = 4, overflow = TextOverflow.Ellipsis, modifier = Modifier.align(Alignment.Center).padding(8.dp))
             if (poster.isNotBlank() && load) {
                 AsyncImage(model = poster, contentDescription = title, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
@@ -264,28 +308,121 @@ private fun PosterCard(
     }
 }
 
+// ------------------------------------------------------------------------------------------ categories
+
+/** Every category as a tile, filed under 4K, language, year, era, kids and collections. */
+@Composable
+private fun CategoriesScreen(session: VodSession) {
+    val p = LocalPalette.current
+    val store = session.store
+    val result by rememberCatalog(session)
+    val catalog = result?.getOrNull()
+    val prefs by store.prefs.collectAsState()
+    var menuFor by remember { mutableStateOf<VodCategory?>(null) }
+    val first = remember { FocusRequester() }
+    val sections = remember(catalog, prefs.hidden, prefs.pinned) {
+        val all = catalog?.categories.orEmpty()
+        val shown = all.filter { it.prefKey !in prefs.hidden }
+        buildList {
+            val pinned = prefs.pinned.mapNotNull { k -> shown.firstOrNull { it.prefKey == k } }
+            if (pinned.isNotEmpty()) add("On your home screen" to pinned)
+            for (f in Facet.entries) {
+                // Year and language shelves read best newest first; the rest keep the provider's order.
+                val list = shown.filter { it.facet == f }.let { l -> if (f == Facet.YEAR || f == Facet.LANGUAGE) l.sortedWith(compareByDescending<VodCategory> { it.year }.thenBy { it.display.lowercase() }) else l }
+                if (list.isNotEmpty()) add(f.title to list)
+            }
+            val hidden = all.filter { it.prefKey in prefs.hidden }
+            if (hidden.isNotEmpty()) add("Hidden" to hidden)
+        }
+    }
+    LaunchedEffect(catalog != null) { if (catalog != null) { delay(150); runCatching { first.requestFocus() } } }
+
+    Column(Modifier.fillMaxSize().padding(top = 30.dp)) {
+        Text(session.kind.label.uppercase(), style = AkoyaType.section, color = p.accent, modifier = Modifier.padding(start = 56.dp))
+        Text("Categories", style = AkoyaType.title, color = p.text, modifier = Modifier.padding(start = 56.dp))
+        Text("OK  open   ·   Hold OK  pin to the home screen, or hide", style = AkoyaType.small, color = p.muted, modifier = Modifier.padding(start = 56.dp, bottom = 6.dp))
+        if (catalog == null) {
+            Text(if (result == null) "Loading…" else result?.exceptionOrNull()?.message ?: "The library couldn't be loaded.", style = AkoyaType.body, color = p.muted, modifier = Modifier.padding(start = 56.dp, top = 12.dp))
+            return@Column
+        }
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(4),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = 56.dp, end = 56.dp, top = 8.dp, bottom = 80.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            sections.forEachIndexed { si, (title, list) ->
+                item(key = "h:$title", span = { GridItemSpan(maxLineSpan) }) {
+                    Text("${title.uppercase()}  ·  ${list.size}", style = AkoyaType.section, color = p.muted, modifier = Modifier.padding(top = if (si == 0) 0.dp else 12.dp))
+                }
+                gridItemsIndexed(list, key = { _, c -> title + "/" + c.key }) { i, c ->
+                    val hidden = c.prefKey in prefs.hidden
+                    TvCard(
+                        width = 200.dp, height = 66.dp, corner = 12.dp,
+                        onClick = { session.open(VodScreen.Grid(c.display, c.items)) },
+                        onLongClick = { menuFor = c },
+                        focusRequester = if (si == 0 && i == 0) first else null,
+                    ) {
+                        Column(Modifier.align(Alignment.CenterStart).padding(horizontal = 14.dp).alpha(if (hidden) 0.5f else 1f)) {
+                            Text(c.display, style = AkoyaType.label, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text("${c.items.size} titles" + if (c.prefKey in prefs.pinned) "  ·  pinned" else "", style = AkoyaType.small, color = p.muted, maxLines = 1)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    menuFor?.let { c ->
+        val pinned = c.prefKey in prefs.pinned
+        val hidden = c.prefKey in prefs.hidden
+        OptionsDialog(
+            title = c.display,
+            subtitle = if (c.display != c.raw.trim()) "${c.raw.trim()}  ·  ${c.items.size} titles" else "${c.items.size} titles",
+            onDismiss = { menuFor = null },
+            options = buildList {
+                if (!hidden) add(DialogOption(if (pinned) "Remove from the home screen" else "Pin to the home screen", Icons.Filled.PushPin) { store.setPinned(c, !pinned) })
+                add(DialogOption(if (hidden) "Show this category" else "Hide this category", if (hidden) Icons.Filled.Visibility else Icons.Filled.VisibilityOff) { store.setHidden(c, !hidden) })
+            },
+        )
+    }
+}
+
 // ------------------------------------------------------------------------------------------ grid
 
 @Composable
 private fun GridScreen(session: VodSession, screen: VodScreen.Grid) {
     val p = LocalPalette.current
+    val store = session.store
+    val prefs by store.prefs.collectAsState()
+    var order by remember { mutableStateOf<VodOrder?>(null) }
+    val items by produceState(screen.items, screen, order) {
+        val o = order
+        value = if (o == null) screen.items else withContext(Dispatchers.Default) { store.sorted(screen.items, o) }
+    }
     val first = remember { FocusRequester() }
     LaunchedEffect(Unit) { delay(120); runCatching { first.requestFocus() } }
-    Column(Modifier.fillMaxSize().padding(top = 30.dp)) {
+    Column(Modifier.fillMaxSize().padding(top = 26.dp)) {
         Text(session.kind.label.uppercase(), style = AkoyaType.section, color = p.accent, modifier = Modifier.padding(start = 56.dp))
         Text("${screen.title}  ·  ${screen.items.size}", style = AkoyaType.title, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 56.dp, end = 56.dp, bottom = 8.dp))
+        Row(Modifier.padding(start = 56.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("SORT", style = AkoyaType.section, color = p.muted, modifier = Modifier.padding(end = 6.dp))
+            VodOrder.entries.forEach { o -> TvButton(o.label, selected = order == o, compact = true, onClick = { order = o }) }
+        }
         if (screen.items.isEmpty()) {
             Text("Nothing found.", style = AkoyaType.body, color = p.muted, modifier = Modifier.padding(start = 56.dp, top = 12.dp))
         }
         LazyVerticalGrid(
             columns = GridCells.Fixed(6),
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 56.dp, end = 56.dp, top = 12.dp, bottom = 80.dp),
+            contentPadding = PaddingValues(start = 56.dp, end = 56.dp, top = 14.dp, bottom = 80.dp),
             horizontalArrangement = Arrangement.spacedBy(22.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
-            gridItemsIndexed(screen.items, key = { _, v -> v.key }) { i, item ->
-                PosterCard(item.poster, item.name, POSTER_W, caption = item.name, focusRequester = if (i == 0) first else null) { session.open(VodScreen.Detail(item)) }
+            gridItemsIndexed(items, key = { _, v -> v.key }) { i, item ->
+                val caption = (if (item.titleKey in prefs.myList) "✓ " else "") + item.name
+                PosterCard(item.poster, item.name, POSTER_W, caption = caption, focusRequester = if (i == 0) first else null, onLongClick = { store.toggleMyList(item) }) { session.open(VodScreen.Detail(item)) }
             }
         }
     }
@@ -323,7 +460,10 @@ private fun DetailScreen(session: VodSession, item: VodItem) {
     fun episodeList(): List<Playable> = seasons.entries.flatMap { (s, eps) ->
         eps.mapNotNull { e ->
             val url = store.episodeUrl(item, e) ?: return@mapNotNull null
-            Playable(item.key + ":" + e.id, item.name, "S$s E${e.number}" + if (e.title.isNotBlank()) "  ·  ${e.title}" else "", item.poster, url, series = true)
+            Playable(
+                item.key + ":" + e.id, item.name, "S$s E${e.number}" + if (e.title.isNotBlank()) "  ·  ${e.title}" else "", item.poster, url, series = true,
+                titleKey = item.titleKey, category = store.categoryName(session.kind, item),
+            )
         }
     }
 
@@ -358,19 +498,21 @@ private fun DetailScreen(session: VodSession, item: VodItem) {
                     val resume = resumes.firstOrNull { it.key == key }
                     val play = { fromStart: Boolean ->
                         store.movieUrl(item, movie?.ext ?: item.ext)?.let { url ->
-                            session.player.play(listOf(Playable(key, item.name, "", item.poster, url, series = false)), 0, fromStart)
+                            session.player.play(listOf(playableFor(session, item, url)), 0, fromStart)
                         }
                         Unit
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TvButton(if (resume != null) "Resume from ${clock(resume.pos)}" else "Play", icon = Icons.Filled.PlayArrow, selected = true, focusRequester = first, onClick = { play(false) })
                         if (resume != null) TvButton("Start over", icon = Icons.Filled.Replay, onClick = { play(true) })
+                        MyListButton(session, item)
                     }
                 } else if (!loaded) {
                     CircularProgressIndicator(color = p.accent, strokeWidth = 3.dp, modifier = Modifier.size(32.dp))
                 } else if (seasons.isEmpty()) {
                     Text("The provider has no episodes listed for this series.", style = AkoyaType.body, color = p.muted)
                 } else {
+                    Row(Modifier.padding(bottom = 8.dp)) { MyListButton(session, item) }
                     TvLazyRow(contentPadding = PaddingValues(vertical = 4.dp), spacing = 6.dp) {
                         itemsIndexed(seasons.keys.toList(), key = { _, s -> s }) { i, s ->
                             TvButton("Season $s", selected = s == season, focusRequester = if (i == 0) first else null, onClick = { season = s }, onFocus = { if (it) season = s })
@@ -400,7 +542,16 @@ private fun DetailScreen(session: VodSession, item: VodItem) {
     }
 }
 
+@Composable
+private fun MyListButton(session: VodSession, item: VodItem) {
+    val prefs by session.store.prefs.collectAsState()
+    val on = item.titleKey in prefs.myList
+    TvButton(if (on) "On my list" else "My list", icon = if (on) Icons.Filled.Check else Icons.Filled.Add, onClick = { session.store.toggleMyList(item) })
+}
+
 // ------------------------------------------------------------------------------------------ player
+
+private val SPEEDS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
 
 @Composable
 private fun PlayerScreen(session: VodSession) {
@@ -410,8 +561,14 @@ private fun PlayerScreen(session: VodSession) {
     var visible by remember { mutableStateOf(true) }
     var pos by remember { mutableLongStateOf(0L) }
     var dur by remember { mutableLongStateOf(0L) }
+    val playButton = remember { FocusRequester() }
 
     LaunchedEffect(player.controlsTick) { visible = true; delay(4_500); visible = false }
+    // The button row goes away by itself after a few quiet seconds, unless paused.
+    LaunchedEffect(player.controlsTick, session.controlsOpen, player.paused, session.menu) {
+        if (session.controlsOpen && !player.paused && session.menu == null) { delay(7_000); session.controlsOpen = false }
+    }
+    LaunchedEffect(session.controlsOpen) { if (session.controlsOpen) { delay(80); runCatching { playButton.requestFocus() } } }
     LaunchedEffect(item.key) {
         var sinceSave = 0
         while (true) {
@@ -440,41 +597,122 @@ private fun PlayerScreen(session: VodSession) {
     }
 
     val shown = player.seekPreview.takeIf { it >= 0 } ?: pos
-    AnimatedVisibility(visible = visible || player.paused || player.seekPreview >= 0, enter = fadeIn(), exit = fadeOut()) {
+    val overlay = session.controlsOpen || visible || player.paused || player.seekPreview >= 0
+
+    // Subtitles sit above the controls when those are up.
+    if (player.cues.isNotEmpty()) {
+        Box(Modifier.fillMaxSize().padding(bottom = if (overlay) 190.dp else 48.dp, start = 120.dp, end = 120.dp), contentAlignment = Alignment.BottomCenter) {
+            Text(
+                player.cues.joinToString("\n"), style = AkoyaType.title.copy(fontSize = AkoyaType.title.fontSize * 0.9f), color = Color.White, textAlign = TextAlign.Center,
+                modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(Color.Black.copy(alpha = 0.6f)).padding(horizontal = 14.dp, vertical = 6.dp),
+            )
+        }
+    }
+
+    AnimatedVisibility(visible = overlay, enter = fadeIn(), exit = fadeOut()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomStart) {
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .background(Brush.verticalGradient(0f to Color.Transparent, 0.5f to Color.Black.copy(alpha = 0.8f), 1f to Color.Black.copy(alpha = 0.92f)))
-                    .padding(start = 56.dp, end = 56.dp, top = 70.dp, bottom = 30.dp),
+                    .background(Brush.verticalGradient(0f to Color.Transparent, 0.45f to Color.Black.copy(alpha = 0.8f), 1f to Color.Black.copy(alpha = 0.94f)))
+                    .padding(start = 56.dp, end = 56.dp, top = 70.dp, bottom = 26.dp),
             ) {
                 Text(item.title, style = AkoyaType.title, color = OnVideo, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (item.subtitle.isNotBlank()) Text(item.subtitle, style = AkoyaType.body, color = OnVideoMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.height(12.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(clock(shown), style = AkoyaType.label, color = OnVideo)
-                    Box(Modifier.padding(horizontal = 14.dp).weight(1f).height(4.dp).clip(RoundedCornerShape(2.dp)).background(Color.White.copy(alpha = 0.22f))) {
-                        Box(Modifier.fillMaxWidth(if (dur > 0) (shown.toFloat() / dur).coerceIn(0f, 1f) else 0f).height(4.dp).background(Color(0xFFC8B79D)))
+                Spacer(Modifier.height(10.dp))
+                SeekBar(player, shown, dur, enabled = session.controlsOpen)
+                if (session.controlsOpen) {
+                    Spacer(Modifier.height(10.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        TvButton("Start over", icon = Icons.Filled.Replay, compact = true, onClick = { player.restart() })
+                        if (player.hasPrevious) TvButton("Previous", icon = Icons.Filled.SkipPrevious, compact = true, onClick = { player.previous() })
+                        TvButton(if (player.paused) "Play" else "Pause", icon = if (player.paused) Icons.Filled.PlayArrow else Icons.Filled.Pause, selected = true, compact = true, focusRequester = playButton, onClick = { player.togglePause() })
+                        if (player.hasNext) TvButton("Next", icon = Icons.Filled.SkipNext, compact = true, onClick = { player.next() })
+                        TvButton("Audio", icon = Icons.Filled.RecordVoiceOver, compact = true, onClick = { session.menu = PlayerMenu.AUDIO })
+                        TvButton(if (player.subtitlesOn) "Subtitles on" else "Subtitles", icon = Icons.Filled.ClosedCaption, compact = true, onClick = { session.menu = PlayerMenu.SUBTITLES })
+                        TvButton(if (player.speed == 1f) "Speed" else "${speedLabel(player.speed)}", icon = Icons.Filled.Speed, compact = true, onClick = { session.menu = PlayerMenu.SPEED })
+                        TvButton("Quality", icon = Icons.Filled.HighQuality, compact = true, onClick = { session.menu = PlayerMenu.QUALITY })
                     }
-                    Text(if (dur > 0) clock(dur) else "", style = AkoyaType.label, color = OnVideoMuted)
+                } else {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        (if (player.paused) "PAUSED   ·   " else "") + "OK  pause   ·   ◀ ▶  skip (hold for more)   ·   ▲ ▼  controls   ·   Back  library",
+                        style = AkoyaType.small, color = OnVideoMuted,
+                    )
                 }
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    (if (player.paused) "PAUSED   ·   " else "") + "OK  pause   ·   ◀ ▶  skip (hold for more)   ·   ▲  audio" + (if (player.hasNext) "   ·   next episode plays automatically" else "") + "   ·   Back  library",
-                    style = AkoyaType.small, color = OnVideoMuted,
-                )
             }
         }
     }
 
-    if (session.audioOpen) {
-        val tracks = remember(item.key, player.loading) { player.audioTracks() }
-        OptionsDialog(
-            title = "Audio",
-            subtitle = if (tracks.size > 1) "Pick a language or sound track" else "This video has one sound track",
-            onDismiss = { session.audioOpen = false },
-            options = tracks.map { t -> DialogOption(t.label, if (t.selected) Icons.Filled.Check else null) { player.selectAudio(t) } }
-                .ifEmpty { listOf(DialogOption("Close") {}) },
+    when (session.menu) {
+        PlayerMenu.AUDIO -> {
+            val tracks = remember(item.key, player.loading) { player.audioTracks() }
+            OptionsDialog(
+                title = "Audio",
+                subtitle = if (tracks.size > 1) "Pick a language or sound track" else "This video has one sound track",
+                onDismiss = { session.menu = null },
+                options = tracks.map { t -> DialogOption(t.label, if (t.selected) Icons.Filled.Check else null) { player.selectAudio(t) } }.ifEmpty { listOf(DialogOption("Close") {}) },
+            )
+        }
+        PlayerMenu.SUBTITLES -> {
+            val tracks = remember(item.key, player.loading) { player.subtitleTracks() }
+            OptionsDialog(
+                title = "Subtitles",
+                subtitle = if (tracks.isEmpty()) "This video has no subtitles built in" else "Subtitles that come inside the video file",
+                onDismiss = { session.menu = null },
+                options = listOf(DialogOption("Off", if (!player.subtitlesOn) Icons.Filled.Check else null) { player.selectSubtitle(null) }) +
+                    tracks.map { t -> DialogOption(t.label, if (player.subtitlesOn && t.selected) Icons.Filled.Check else null) { player.selectSubtitle(t) } },
+            )
+        }
+        PlayerMenu.SPEED -> OptionsDialog(
+            title = "Speed",
+            onDismiss = { session.menu = null },
+            options = SPEEDS.map { s -> DialogOption(if (s == 1f) "Normal" else speedLabel(s), if (player.speed == s) Icons.Filled.Check else null) { player.changeSpeed(s) } },
         )
+        PlayerMenu.QUALITY -> {
+            val heights = remember(item.key, player.loading) { player.videoHeights() }
+            OptionsDialog(
+                title = "Quality",
+                subtitle = if (heights.size > 1) "This video comes in ${heights.joinToString(", ") { "${it}p" }}"
+                else "This video is a single file" + (heights.firstOrNull()?.let { " at ${it}p" } ?: "") + ", so there is nothing to switch. Look for the title in another category (4K, or a smaller version) for a different quality.",
+                onDismiss = { session.menu = null },
+                options = if (heights.size > 1) {
+                    listOf(DialogOption("Automatic", if (player.maxHeight == 0) Icons.Filled.Check else null) { player.changeMaxHeight(0) }) +
+                        heights.map { h -> DialogOption("Up to ${h}p", if (player.maxHeight == h) Icons.Filled.Check else null) { player.changeMaxHeight(h) } }
+                } else listOf(DialogOption("Close") {}),
+            )
+        }
+        null -> Unit
+    }
+}
+
+private fun speedLabel(s: Float): String = (if (s % 1f == 0f) s.toInt().toString() else s.toString()) + "×"
+
+/** The timeline. With the controls up it can take focus: Left/Right then skip along it. */
+@Composable
+private fun SeekBar(player: VodPlayer, shown: Long, dur: Long, enabled: Boolean) {
+    var focused by remember { mutableStateOf(false) }
+    val accent = Color(0xFFC8B79D)
+    Row(
+        (if (enabled) Modifier
+            .onFocusChanged { focused = it.isFocused }
+            .onKeyEvent { ev ->
+                val down = ev.type == KeyEventType.KeyDown
+                val step = 10_000L * (1 + ev.nativeKeyEvent.repeatCount / 6).coerceAtMost(12)
+                when (ev.nativeKeyEvent.keyCode) {
+                    NativeKeyEvent.KEYCODE_DPAD_LEFT -> { if (down) player.skip(-step) else player.commitSeek(); true }
+                    NativeKeyEvent.KEYCODE_DPAD_RIGHT -> { if (down) player.skip(step) else player.commitSeek(); true }
+                    else -> false
+                }
+            }
+            .focusable() else Modifier).fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(clock(shown), style = AkoyaType.label, color = OnVideo)
+        val thick = if (focused && enabled) 8.dp else 4.dp
+        Box(Modifier.padding(horizontal = 14.dp).weight(1f).height(thick).clip(RoundedCornerShape(4.dp)).background(Color.White.copy(alpha = if (focused && enabled) 0.4f else 0.22f))) {
+            Box(Modifier.fillMaxWidth(if (dur > 0) (shown.toFloat() / dur).coerceIn(0f, 1f) else 0f).height(thick).background(if (focused && enabled) Color.White else accent))
+        }
+        Text(if (dur > 0) clock(dur) else "", style = AkoyaType.label, color = OnVideoMuted)
     }
 }

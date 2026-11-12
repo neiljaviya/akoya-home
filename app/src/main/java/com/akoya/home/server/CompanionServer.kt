@@ -89,6 +89,11 @@ class CompanionServer private constructor(private val ctx: Context) : NanoHTTPD(
                 val b = readJson(s)
                 val live = LiveTvStore.get(ctx)
                 try {
+                    if (b.optString("replace").isNotBlank()) {
+                        live.replaceSource(b.optString("replace"), b.optString("name"), b.optString("url"), b.optString("server"), b.optString("username"), b.optString("password"))
+                        if (b.optString("guide").isNotBlank()) live.setGuideUrl(b.optString("replace"), b.optString("guide"))
+                        return liveTv()
+                    }
                     val added = when {
                         b.optString("preset").isNotBlank() ->
                             live.addPreset(b.optString("preset")) ?: throw IllegalArgumentException("Unknown list")
@@ -109,6 +114,13 @@ class CompanionServer private constructor(private val ctx: Context) : NanoHTTPD(
                 } catch (e: IllegalArgumentException) {
                     json(Response.Status.BAD_REQUEST, JSONObject().put("error", e.message ?: "Couldn't use that link"))
                 }
+            }
+            // The film or series library as a spreadsheet file, for sorting it out on a computer.
+            path == "/vod/export" && m == Method.GET -> {
+                val kind = if (param(s, "kind") == "series") com.akoya.home.vod.VodKind.SERIES else com.akoya.home.vod.VodKind.MOVIES
+                val f = com.akoya.home.vod.VodStore.get(ctx).exportCsv(kind)
+                if (f == null) text(Response.Status.NOT_FOUND, "Open ${kind.label} on the TV once first, so the library is downloaded")
+                else fileResponse(f).also { it.addHeader("Content-Disposition", "attachment; filename=\"${f.name}\"") }
             }
             path == "/livetv/refresh" && m == Method.POST -> { LiveTvStore.get(ctx).refreshAsync(param(s, "id").orEmpty()); liveTv() }
             path == "/livetv/toggle" && m == Method.POST -> {
@@ -180,7 +192,7 @@ class CompanionServer private constructor(private val ctx: Context) : NanoHTTPD(
         val presets = JSONArray()
         PLAYLIST_PRESETS.filter { pre -> live.current.playlists.none { it.url == pre.url } }
             .forEach { presets.put(JSONObject().put("id", it.id).put("name", it.name)) }
-        return ok(JSONObject().put("playlists", arr).put("presets", presets).put("favorites", live.current.favorites.size))
+        return ok(JSONObject().put("playlists", arr).put("presets", presets).put("favorites", live.current.favorites.size).put("notice", live.notice.value ?: JSONObject.NULL))
     }
 
     private fun status(): Response {

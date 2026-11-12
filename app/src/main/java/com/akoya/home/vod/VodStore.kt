@@ -39,12 +39,32 @@ data class VodItem(
     val year: String = "",
 )
 
-class VodRow(val key: String, val title: String, val items: List<VodItem>)
-
-/** A whole library of one kind, arranged into rows. */
-class VodCatalog(val items: List<VodItem>, val rows: List<VodRow>) {
-    val byKey: Map<String, VodItem> = items.associateBy { it.key }
+/** A provider category: [raw] is the provider's name, [display] the tidied one. */
+class VodCategory(val key: String, val raw: String, val display: String, val facet: Facet, val year: Int, val items: List<VodItem>) {
+    /** How the user's choices (hidden, pinned) refer to it: by name, so they survive a change of provider. */
+    val prefKey: String get() = raw.trim().lowercase()
 }
+
+/** A row on the library's home screen: a short [items] preview of the longer [all]. */
+class VodRow(val key: String, val title: String, val items: List<VodItem>, val all: List<VodItem> = items)
+
+/** A whole library of one kind. */
+class VodCatalog(val items: List<VodItem>, val categories: List<VodCategory>) {
+    val byCategory: Map<String, List<VodItem>> = categories.associate { it.key to it.items }
+    val byTitle: Map<String, VodItem> by lazy { HashMap<String, VodItem>(items.size * 2).also { m -> for (i in items) m.putIfAbsent(i.titleKey, i) } }
+}
+
+/** What the user has chosen for the library. Categories are named, titles are keyed by title. */
+data class VodPrefs(
+    val hidden: Set<String> = emptySet(),
+    val pinned: List<String> = emptyList(),
+    val myList: List<String> = emptyList(),
+    val history: List<Watch> = emptyList(),
+)
+
+enum class VodOrder(val label: String) { ADDED("Recently added"), NAME("A to Z"), RATING("Top rated"), YEAR("Newest first") }
+
+val VodItem.titleKey: String get() = VodSort.titleKey(name, series)
 
 class MovieInfo(val plot: String, val genre: String, val year: String, val duration: String, val rating: String, val cast: String, val director: String, val backdrop: String, val ext: String)
 
@@ -74,7 +94,7 @@ data class Resume(
 class VodStore private constructor(private val context: Context) {
     private val live = LiveTvStore.get(context)
     private val dir = File(context.filesDir, "vod").apply { mkdirs() }
-    private val prefs = context.getSharedPreferences("akoya_vod", Context.MODE_PRIVATE)
+    private val prefs0 = context.getSharedPreferences("akoya_vod", Context.MODE_PRIVATE)
     private val locks = mapOf(VodKind.MOVIES to Mutex(), VodKind.SERIES to Mutex())
     private val catalogs = HashMap<VodKind, VodCatalog>()
 
@@ -111,14 +131,115 @@ class VodStore private constructor(private val context: Context) {
     }
 
     private fun arrange(items: List<VodItem>, categories: Map<String, String>): VodCatalog {
-        val rows = ArrayList<VodRow>()
-        val recent = items.filter { it.added > 0 }.sortedByDescending { it.added }.take(40)
-        if (recent.size >= 6) rows += VodRow("__recent", "Recently added", recent)
         val grouped = LinkedHashMap<String, MutableList<VodItem>>()
         for (k in categories.keys) grouped[k] = ArrayList()
         for (i in items) grouped.getOrPut(i.category) { ArrayList() }.add(i)
-        for ((k, list) in grouped) if (list.isNotEmpty()) rows += VodRow(k, categories[k] ?: "Other", list)
-        return VodCatalog(items, rows)
+        val out = ArrayList<VodCategory>()
+        for ((k, list) in grouped) {
+            if (list.isEmpty()) continue
+            val raw = categories[k] ?: "Other"
+            out += VodCategory(k, raw, VodSort.display(raw), VodSort.classify(raw), VodSort.yearOf(raw), list)
+        }
+        return VodCatalog(items, out)
+    }
+
+    // ------------------------------------------------------------------ the user's arrangement
+
+    private val _prefs = MutableStateFlow(loadPrefs())
+    val prefs: StateFlow<VodPrefs> = _prefs.asStateFlow()
+
+    private fun change(transform: (VodPrefs) -> VodPrefs) {
+        val next = transform(_prefs.value)
+        _prefs.value = next
+        val o = JSONObject()
+            .put("hidden", JSONArray(next.hidden.toList())).put("pinned", JSONArray(next.pinned)).put("myList", JSONArray(next.myList))
+            .put("history", JSONArray().also { a -> next.history.forEach { a.put(JSONObject().put("t", it.titleKey).put("c", it.category).put("at", it.at)) } })
+        prefs0.edit().putString("prefs", o.toString()).apply()
+    }
+
+    private fun loadPrefs(): VodPrefs = runCatching {
+        val o = JSONObject(prefs0.getString("prefs", "{}") ?: "{}")
+        fun strings(name: String): List<String> = o.optJSONArray(name)?.let { a -> (0 until a.length()).map { a.optString(it) }.filter { it.isNotBlank() } }.orEmpty()
+        val h = o.optJSONArray("history")
+        VodPrefs(
+            hidden = strings("hidden").toSet(), pinned = strings("pinned"), myList = strings("myList"),
+            history = (0 until (h?.length() ?: 0)).mapNotNull { i -> h?.optJSONObject(i)?.let { Watch(it.optString("t"), it.optString("c"), it.optLong("at")) } },
+        )
+    }.getOrDefault(VodPrefs())
+
+    fun setHidden(c: VodCategory, hidden: Boolean) = change { it.copy(hidden = if (hidden) it.hidden + c.prefKey else it.hidden - c.prefKey, pinned = if (hidden) it.pinned - c.prefKey else it.pinned) }
+    fun setPinned(c: VodCategory, pinned: Boolean) = change { it.copy(pinned = if (pinned) (it.pinned - c.prefKey) + c.prefKey else it.pinned - c.prefKey) }
+    fun toggleMyList(item: VodItem) = change { if (item.titleKey in it.myList) it.copy(myList = it.myList - item.titleKey) else it.copy(myList = listOf(item.titleKey) + it.myList) }
+
+    /** Notes that something was watched, to steer recommendations. The category is stored by name. */
+    fun recordWatch(titleKey: String, categoryName: String) = change {
+        it.copy(history = (listOf(Watch(titleKey, categoryName, System.currentTimeMillis())) + it.history.filterNot { w -> w.titleKey == titleKey }).take(80))
+    }
+
+    fun categoryName(kind: VodKind, item: VodItem): String =
+        catalogs[kind]?.categories?.firstOrNull { it.key == item.category }?.prefKey.orEmpty()
+
+    fun sorted(items: List<VodItem>, order: VodOrder): List<VodItem> = when (order) {
+        VodOrder.ADDED -> items.sortedByDescending { it.added }
+        VodOrder.NAME -> items.sortedBy { it.name.lowercase() }
+        VodOrder.RATING -> items.sortedByDescending { it.rating.toFloatOrNull() ?: 0f }
+        VodOrder.YEAR -> items.sortedByDescending { it.year.toIntOrNull() ?: 0 }
+    }
+
+    /**
+     * The library's home screen: the user's own rows first, then what's new, then a handful
+     * of the provider's shelves that most people want (trending, this year's, 4K, kids).
+     */
+    fun homeRows(catalog: VodCatalog, prefs: VodPrefs): List<VodRow> {
+        val rows = ArrayList<VodRow>()
+        val used = HashSet<String>()
+        val shown = catalog.categories.filter { it.prefKey !in prefs.hidden }
+        fun preview(list: List<VodItem>) = list.sortedByDescending { it.added }.take(HOME_ROW)
+        fun shelf(c: VodCategory, title: String = c.display) {
+            if (rows.size < 14 && used.add(c.key)) rows += VodRow(c.key, title, preview(c.items), c.items)
+        }
+
+        val mine = prefs.myList.mapNotNull { catalog.byTitle[it] }
+        if (mine.isNotEmpty()) rows += VodRow("__mylist", "My list", mine.take(HOME_ROW), mine)
+
+        // Recommendations work on category names, so they carry across providers.
+        val byName = shown.associate { it.prefKey to it.items }
+        val picks = VodSort.recommend(byName, prefs.history, HOME_ROW)
+        if (picks.size >= 6) rows += VodRow("__foryou", "Recommended for you", picks)
+        prefs.history.maxByOrNull { it.at }?.let { last ->
+            val title = catalog.byTitle[last.titleKey]?.name ?: return@let
+            val more = byName[last.category].orEmpty().filter { it.titleKey != last.titleKey }.sortedByDescending { it.rating.toFloatOrNull() ?: 0f }
+            if (more.size >= 6) rows += VodRow("__because", "Because you watched $title", more.take(HOME_ROW), more)
+        }
+
+        val recent = catalog.items.asSequence().filter { it.added > 0 }.sortedByDescending { it.added }.take(HOME_ROW * 2).toList()
+        if (recent.size >= 6) rows += VodRow("__recent", "Recently added", recent.take(HOME_ROW), recent)
+
+        for (key in prefs.pinned) shown.firstOrNull { it.prefKey == key }?.let { shelf(it) }
+        shown.firstOrNull { c -> TRENDING.any { it in c.raw.lowercase() } }?.let { shelf(it) }
+        val newest = shown.filter { it.facet == Facet.LANGUAGE || it.facet == Facet.YEAR }.maxOfOrNull { it.year } ?: 0
+        if (newest > 0) shown.filter { it.year == newest && (it.facet == Facet.LANGUAGE || it.facet == Facet.YEAR) }.take(4).forEach { shelf(it) }
+        shown.firstOrNull { it.facet == Facet.UHD }?.let { shelf(it) }
+        shown.firstOrNull { it.facet == Facet.KIDS }?.let { shelf(it) }
+        return rows
+    }
+
+    /** The library as a spreadsheet file (CSV), or null when it can't be loaded. */
+    fun exportCsv(kind: VodKind): File? {
+        val catalog = catalogs[kind] ?: kotlinx.coroutines.runBlocking { catalog(kind) }.getOrNull() ?: return null
+        val names = catalog.categories.associate { it.key to it.raw }
+        val file = File(context.cacheDir, "akoya-${kind.label.lowercase()}.csv")
+        fun cell(s: String) = "\"" + s.replace("\"", "\"\"") + "\""
+        val day = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+        file.bufferedWriter().use { w ->
+            w.write("\uFEFFTitle,Year,Category,Shelf,Rating,Added,Id\n")
+            for (i in catalog.items) {
+                val raw = names[i.category].orEmpty()
+                w.write(listOf(cell(i.name), i.year, cell(raw), cell(VodSort.classify(raw).title), i.rating, if (i.added > 0) day.format(java.util.Date(i.added * 1000)) else "", i.id).joinToString(","))
+                w.write("\n")
+            }
+        }
+        return file
     }
 
     private fun readCategories(file: File, a: XtreamAccount, into: MutableMap<String, String>) {
@@ -141,6 +262,8 @@ class VodStore private constructor(private val context: Context) {
             r.endArray()
         }
     }
+
+    private val thisYear = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
 
     private fun readItems(file: File, a: XtreamAccount, series: Boolean, into: MutableList<VodItem>) {
         JsonReader(file.reader()).use { r ->
@@ -168,7 +291,8 @@ class VodStore private constructor(private val context: Context) {
                     into += VodItem(
                         key = a.playlistId + (if (series) ":s:" else ":m:") + id, id = id, playlistId = a.playlistId, name = name.trim(),
                         poster = poster, category = a.playlistId + ":" + cat, rating = rating.takeIf { it.toFloatOrNull()?.let { v -> v > 0f } == true }.orEmpty(),
-                        added = added, ext = ext, series = series, plot = plot, year = year,
+                        added = added, ext = ext, series = series, plot = plot,
+                        year = year.ifBlank { VodSort.yearOf(name, thisYear + 1).takeIf { it > 0 }?.toString().orEmpty() },
                     )
                 }
             }
@@ -286,11 +410,11 @@ class VodStore private constructor(private val context: Context) {
                     .put("url", it.url).put("pos", it.pos).put("dur", it.dur).put("updated", it.updated).put("series", it.series),
             )
         }
-        prefs.edit().putString("resumes", arr.toString()).apply()
+        prefs0.edit().putString("resumes", arr.toString()).apply()
     }
 
     private fun loadResumes(): List<Resume> = runCatching {
-        val arr = JSONArray(prefs.getString("resumes", "[]"))
+        val arr = JSONArray(prefs0.getString("resumes", "[]"))
         (0 until arr.length()).mapNotNull { i ->
             val o = arr.optJSONObject(i) ?: return@mapNotNull null
             Resume(o.optString("key"), o.optString("title"), o.optString("subtitle"), o.optString("poster"), o.optString("url"), o.optLong("pos"), o.optLong("dur"), o.optLong("updated"), o.optBoolean("series"))
@@ -322,6 +446,8 @@ class VodStore private constructor(private val context: Context) {
     companion object {
         private const val TAG = "AkoyaVod"
         private const val DAY_MS = 24L * 60 * 60 * 1000
+        private const val HOME_ROW = 30
+        private val TRENDING = listOf("trending", "popular", "top rated", "top 10", "most watched")
 
         @Volatile private var instance: VodStore? = null
         fun get(context: Context): VodStore =
