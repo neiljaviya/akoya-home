@@ -8,8 +8,10 @@ data class GroupEntry(
     val key: String,
     val label: String,
     val count: Int,
-    /** True for a whole playlist (shown as a heading you can still select). */
+    /** True for a section heading (Hindi, Sports, …): selecting it lists the whole section. */
     val isPlaylist: Boolean = false,
+    /** The section this group is filed under. */
+    val section: String = "",
     /** A category the user made. */
     val isCustom: Boolean = false,
     val hidden: Boolean = false,
@@ -26,6 +28,8 @@ data class ChannelPrefs(
     val groupNames: Map<String, String> = emptyMap(),
     val categories: List<Category> = emptyList(),
     val sortAz: Boolean = false,
+    /** Groups the user moved to a different section: group key to section name. */
+    val groupSections: Map<String, String> = emptyMap(),
     /** Channels to leave out because they don't work (only filled when the user asked for that). */
     val offAir: Set<String> = emptySet(),
 )
@@ -49,29 +53,37 @@ class ChannelIndex(raw: List<Channel>, playlists: List<Playlist>, prefs: Channel
     private val byKey = HashMap<String, List<Channel>>()
     private val sameChannel = HashMap<String, MutableList<Channel>>()
 
+    private val sectionOfGroup = HashMap<String, String>()
+
     init {
-        val shown = ArrayList<Channel>(raw.size)
-        val perPlaylist = LinkedHashMap<String, LinkedHashMap<String, MutableList<Channel>>>()
-        val hiddenGroupSizes = HashMap<String, Int>()
+        val names = playlists.associate { it.id to it.name }
+        // section -> group key -> channels, in section order then the provider's order.
+        val tree = LinkedHashMap<String, LinkedHashMap<String, MutableList<Channel>>>()
+        for (s in ChannelSort.SECTIONS) tree[s] = LinkedHashMap()
+        val rawName = HashMap<String, String>()
+        val hiddenSizes = HashMap<String, Int>()
+        val perPlaylist = HashMap<String, MutableList<Channel>>()
         var hiddenChannels = 0
         for (c0 in raw) {
+            if (ChannelSort.isSeparator(c0.name)) continue
+            val groupKey = c0.playlistId + "/" + c0.group
+            val section = sectionOfGroup.getOrPut(groupKey) {
+                prefs.groupSections[groupKey]?.takeIf { it in ChannelSort.SECTIONS } ?: ChannelSort.sectionOf(c0.group, names[c0.playlistId].orEmpty())
+            }
+            val groupsOfSection = tree.getValue(section)
+            val list = groupsOfSection.getOrPut(groupKey) { rawName[groupKey] = c0.group; ArrayList() }
             if (c0.id in prefs.hiddenChannels) { hiddenChannels++; continue }
             if (c0.id in prefs.offAir) continue
-            val groupKey = c0.playlistId + "/" + c0.group
-            val groupsOfPlaylist = perPlaylist.getOrPut(c0.playlistId) { LinkedHashMap() }
-            if (groupKey in prefs.hiddenGroups) {
-                hiddenGroupSizes[groupKey] = (hiddenGroupSizes[groupKey] ?: 0) + 1
-                groupsOfPlaylist.getOrPut(c0.group) { ArrayList(0) }
-                continue
-            }
+            if (groupKey in prefs.hiddenGroups) { hiddenSizes[groupKey] = (hiddenSizes[groupKey] ?: 0) + 1; continue }
             val c = prefs.renames[c0.id]?.let { c0.copy(name = it) } ?: c0
-            groupsOfPlaylist.getOrPut(c.group) { ArrayList() }.add(c)
-            shown += c
+            list += c
+            perPlaylist.getOrPut(c.playlistId) { ArrayList() }.add(c)
         }
-        if (prefs.sortAz) {
-            shown.sortBy { it.name.lowercase() }
-            for (g in perPlaylist.values) for (list in g.values) list.sortBy { it.name.lowercase() }
-        }
+        if (prefs.sortAz) for (g in tree.values) for (list in g.values) list.sortBy { it.name.lowercase() }
+        // Channel numbers and zapping follow the sections: Hindi first, the rest of the world last.
+        val shown = ArrayList<Channel>(raw.size)
+        for (g in tree.values) for (list in g.values) shown += list
+        if (prefs.sortAz) shown.sortBy { it.name.lowercase() }
         all = shown
         hiddenChannelCount = hiddenChannels
 
@@ -84,6 +96,7 @@ class ChannelIndex(raw: List<Channel>, playlists: List<Playlist>, prefs: Channel
         }
         byId = ids
         numberOf = numbers
+        for ((pid, list) in perPlaylist) byKey["p:$pid"] = list
 
         val visible = ArrayList<GroupEntry>()
         val everything = ArrayList<GroupEntry>()
@@ -93,33 +106,35 @@ class ChannelIndex(raw: List<Channel>, playlists: List<Playlist>, prefs: Channel
             byKey[key] = list
             visible += GroupEntry(key, cat.name, list.size, isCustom = true)
         }
-        val names = playlists.associate { it.id to it.name }
-        val several = perPlaylist.size > 1
-        for ((pid, perGroup) in perPlaylist) {
-            val playlistName = names[pid] ?: "Playlist"
+        for ((section, perGroup) in tree) {
+            if (perGroup.isEmpty()) continue
             val whole = perGroup.values.flatten().let { if (prefs.sortAz) it.sortedBy { c -> c.name.lowercase() } else it }
-            if (several) {
-                val key = "p:$pid"
-                byKey[key] = whole
-                val entry = GroupEntry(key, playlistName, whole.size, isPlaylist = true)
-                if (whole.isNotEmpty()) visible += entry
-                everything += entry
-            }
-            for ((g, sub) in perGroup) {
-                val key = "$pid/$g"
-                val label = prefs.groupNames[key] ?: g.ifBlank { "Other" }
+            val sectionKey = "s:$section"
+            byKey[sectionKey] = whole
+            sectionOfGroup[sectionKey] = section
+            val head = GroupEntry(sectionKey, section, whole.size, isPlaylist = true, section = section)
+            if (whole.isNotEmpty()) visible += head
+            everything += head
+            val taken = HashSet<String>()
+            for ((key, sub) in perGroup) {
+                // Two playlists can both have a "News": the second one says where it is from.
+                val plain = ChannelSort.label(rawName[key].orEmpty(), section)
+                val label = prefs.groupNames[key] ?: if (taken.add(plain.lowercase())) plain else "$plain · ${names[key.substringBefore('/')] ?: "other list"}"
                 val hidden = key in prefs.hiddenGroups
-                everything += GroupEntry(key, label, if (hidden) hiddenGroupSizes[key] ?: 0 else sub.size, hidden = hidden)
-                if (!hidden && perGroup.size > 1 && sub.isNotEmpty()) {
+                everything += GroupEntry(key, label, if (hidden) hiddenSizes[key] ?: 0 else sub.size, hidden = hidden, section = section)
+                if (!hidden && sub.isNotEmpty()) {
                     byKey[key] = sub
-                    visible += GroupEntry(key, label, sub.size)
+                    visible += GroupEntry(key, label, sub.size, section = section)
                 }
             }
         }
         groups = visible
         allGroups = everything
-        hasPlaylistRows = several
+        hasPlaylistRows = true
     }
+
+    /** The section a group (or section heading) belongs to; empty for favourites, all and own categories. */
+    fun sectionOf(key: String): String = sectionOfGroup[key].orEmpty()
 
     fun hasGroup(key: String) = key == GROUP_FAV || key == GROUP_ALL || key in byKey
 

@@ -121,13 +121,14 @@ data class LiveTvState(
     val groupNames: Map<String, String> = emptyMap(),
     val categories: List<Category> = emptyList(),
     val sortAz: Boolean = false,
+    val groupSections: Map<String, String> = emptyMap(),
     /** Leave channels that failed twice running out of the lists altogether. */
     val hideOffAir: Boolean = false,
     /** Highest picture height to play (0 = whatever the connection manages). */
     val maxHeight: Int = 0,
 ) {
     fun prefs(): ChannelPrefs = ChannelPrefs(
-        renames, hiddenChannels, hiddenGroups, groupNames, categories, sortAz,
+        renames, hiddenChannels, hiddenGroups, groupNames, categories, sortAz, groupSections,
         offAir = if (hideOffAir) failing.filterValues { it >= 2 }.keys else emptySet(),
     )
 
@@ -613,6 +614,9 @@ class LiveTvStore private constructor(private val context: Context) {
         })
     }
 
+    /** Files a group under a different section than the one worked out from its name. */
+    fun setGroupSection(key: String, section: String) = manage { it.copy(groupSections = it.groupSections + (key to section)) }
+
     fun setSortAz(on: Boolean) = manage { it.copy(sortAz = on) }
     fun setHideOffAir(on: Boolean) = manage { it.copy(hideOffAir = on) }
     fun setMaxHeight(h: Int) = updateState { it.copy(maxHeight = h) }
@@ -757,6 +761,7 @@ class LiveTvStore private constructor(private val context: Context) {
                     }.filter { it.id.isNotBlank() }
                 }.orEmpty(),
                 sortAz = o.optBoolean("sortAz", false),
+                groupSections = o.optJSONObject("groupSections").toStringMap(),
                 hideOffAir = o.optBoolean("hideOffAir", false),
                 maxHeight = o.optInt("maxHeight", 0),
                 failing = o.optJSONObject("failing")?.let { f -> f.keys().asSequence().associateWith { k -> f.optInt(k) } }.orEmpty(),
@@ -777,6 +782,7 @@ class LiveTvStore private constructor(private val context: Context) {
             s.categories.forEach { c -> arr.put(JSONObject().put("id", c.id).put("name", c.name).put("channels", JSONArray(c.channels))) }
         })
         .put("sortAz", s.sortAz)
+        .put("groupSections", JSONObject(s.groupSections))
         .put("hideOffAir", s.hideOffAir)
         .put("maxHeight", s.maxHeight)
         .put("failing", JSONObject().also { o -> s.failing.forEach { (k, v) -> o.put(k, v) } })

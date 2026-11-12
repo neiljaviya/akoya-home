@@ -313,15 +313,19 @@ private fun ChannelPanel(session: LiveTvSession, index: ChannelIndex, favorites:
     val currentRow = remember { FocusRequester() }
     val currentGroup = remember { FocusRequester() }
     var focusedRow by remember { mutableIntStateOf(-1) }
-    var focusedGroup by remember { mutableIntStateOf(-1) }
     var jumpTo by remember { mutableIntStateOf(-1) }
 
-    val groupRows = remember(index, favorites.size) {
+    // Only the section being browsed is opened out; the others show as one heading each.
+    val openSection = index.sectionOf(session.groupKey)
+    val groupRows = remember(index, favorites.size, openSection) {
         listOf(
             GroupEntry(GROUP_FAV, "Favourites", favorites.size),
             GroupEntry(GROUP_ALL, "All channels", index.all.size),
-        ) + index.groups
+        ) + index.groups.filter { it.isCustom || it.isPlaylist || it.section == openSection }
     }
+    var focusedGroupKey by remember { mutableStateOf("") }
+    // By key, not position: opening one section and closing another moves the rows about.
+    val focusedGroup = groupRows.indexOfFirst { it.key == focusedGroupKey }
 
     // On opening, land on the channel that's playing.
     LaunchedEffect(Unit) {
@@ -380,13 +384,13 @@ private fun ChannelPanel(session: LiveTvSession, index: ChannelIndex, favorites:
                             selected = selected,
                             onClick = { session.groupKey = g.key },
                             onLongClick = if (g.key == GROUP_FAV) null else ({ session.groupOptionsFor = g.key }),
-                            onFocus = { session.groupKey = g.key; focusedGroup = i },
+                            onFocus = { session.groupKey = g.key; focusedGroupKey = g.key },
                             modifier = Modifier.focusRequester(if (selected) currentGroup else own),
                         ) { fg, sub ->
                             if (g.key == GROUP_FAV) {
                                 Icon(Icons.Filled.Star, null, tint = fg, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(8.dp))
-                            } else if (!g.isPlaylist && index.hasPlaylistRows) {
+                            } else if (!g.isPlaylist && !g.isCustom && g.key != GROUP_ALL) {
                                 Spacer(Modifier.width(12.dp))
                             }
                             Text(

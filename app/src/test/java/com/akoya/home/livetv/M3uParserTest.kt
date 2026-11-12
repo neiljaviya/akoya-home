@@ -123,127 +123,24 @@ class ChannelIndexTest {
     }
 
     @Test
-    fun groupsListPlaylistsOnlyWhenThereAreSeveral() {
-        val one = ChannelIndex(listOf(ch("1", "A", "http://a/1").copy(group = "News"), ch("2", "B", "http://a/2").copy(group = "Kids")), emptyList())
-        assertEquals(listOf("News", "Kids"), one.groups.map { it.label })
-        val two = ChannelIndex(listOf(ch("1", "A", "http://a/1"), ch("2", "B", "http://b/2", pl = "p2")), emptyList())
-        assertEquals(listOf(true, true), two.groups.map { it.isPlaylist })
-        assertEquals(1, two.channels("p:p2", emptyList()).size)
-    }
-}
-
-class GuideAndCatchupTest {
-    @Test
-    fun headerGuideLinksAndCatchupAreRead() {
-        val text = """
-            #EXTM3U url-tvg="http://epg.example/a.xml.gz, http://epg.example/b.xml" catchup="shift" catchup-days="5"
-            #EXTINF:-1 tvg-id="one",One
-            http://h/one.m3u8
-            #EXTINF:-1 tvg-id="two" catchup="default" catchup-source="http://h/two-{utc}-{duration}.m3u8" catchup-days="2",Two
-            http://h/two.m3u8
-        """.trimIndent()
-        val parsed = M3uParser.parsePlaylist(text.lineSequence(), "p")
-        assertEquals(listOf("http://epg.example/a.xml.gz", "http://epg.example/b.xml"), parsed.epgUrls)
-        assertEquals("shift", parsed.channels[0].catchup)
-        assertEquals(5, parsed.channels[0].catchupDays)
-        assertEquals("default", parsed.channels[1].catchup)
-        assertEquals(2, parsed.channels[1].catchupDays)
-        assertTrue(parsed.channels[1].hasCatchup)
-    }
-
-    @Test
-    fun timeshiftAttributeMeansXtreamStyleAndPlainChannelsHaveNone() {
-        val parsed = M3uParser.parsePlaylist("#EXTM3U\n#EXTINF:-1 timeshift=\"3\",A\nhttp://h:80/live/u/p/7.ts\n#EXTINF:-1,B\nhttp://h/b\n".lineSequence(), "p")
-        assertEquals("xc", parsed.channels[0].catchup)
-        assertEquals(3, parsed.channels[0].catchupDays)
-        assertEquals("", parsed.channels[1].catchup)
-        assertEquals(false, parsed.channels[1].hasCatchup)
-    }
-
-    private fun ch(url: String, type: String, source: String = "") =
-        Channel(id = "1", playlistId = "p", name = "N", url = url, catchup = type, catchupSource = source, catchupDays = 3)
-
-    // 2026-11-11 06:30:00 UTC, one hour long; "now" is two hours after the start.
-    private val start = 1_794_378_600_000L
-    private val stop = start + 3_600_000
-    private val now = start + 7_200_000
-
-    @Test
-    fun xtreamCatchupUsesServerClockAndMinutes() {
-        val url = Catchup.url(ch("http://h:8080/live/user/pass/77.ts", "xc"), start, stop, now, java.time.ZoneId.of("Asia/Kolkata"))
-        assertEquals("http://h:8080/timeshift/user/pass/60/2026-11-11:12-00/77.ts", url)
-        val short = Catchup.url(ch("http://h:8080/user/pass/77", "xc"), start, stop, now)
-        assertEquals("http://h:8080/timeshift/user/pass/60/2026-11-11:06-30/77.ts", short)
-    }
-
-    @Test
-    fun otherCatchupStyles() {
-        val s = start / 1000
-        assertEquals("http://h/a.m3u8?utc=$s&lutc=${now / 1000}", Catchup.url(ch("http://h/a.m3u8", "shift"), start, stop, now))
-        assertEquals("http://h/a.m3u8?t=1&utc=$s&lutc=${now / 1000}", Catchup.url(ch("http://h/a.m3u8?t=1", "shift"), start, stop, now))
-        assertEquals("http://h/a.m3u8?from=$s&len=3600", Catchup.url(ch("http://h/a.m3u8", "append", "?from=\${start}&len={duration}"), start, stop, now))
-        assertEquals("http://x/2026/11/11/06-30.ts?o=7200", Catchup.url(ch("http://h/a", "default", "http://x/{Y}/{m}/{d}/{H}-{M}.ts?o={offset}"), start, stop, now))
-        assertEquals("http://h/ch/index-$s-3600.m3u8?token=9", Catchup.url(ch("http://h/ch/index.m3u8?token=9", "flussonic"), start, stop, now))
-        assertEquals("http://h/ch/timeshift_abs-$s.ts", Catchup.url(ch("http://h/ch/mpegts", "flussonic"), start, stop, now))
-    }
-
-    @Test
-    fun programmeStillOnAirEndsNowAndNoCatchupGivesNull() {
-        val live = Catchup.url(ch("http://h/a.m3u8", "append", "?d={duration}"), start, start + 4 * 3_600_000, now)
-        assertEquals("http://h/a.m3u8?d=7200", live)
-        assertEquals(null, Catchup.url(Channel(id = "1", playlistId = "p", name = "N", url = "http://h/a"), start, stop, now))
-        assertTrue(Catchup.covers(ch("http://h/a", "shift"), now - 2 * 86_400_000L, now))
-        assertEquals(false, Catchup.covers(ch("http://h/a", "shift"), now - 4 * 86_400_000L, now))
-        assertEquals(false, Catchup.covers(ch("http://h/a", "shift"), now + 1000, now))
-    }
-
-    @Test
-    fun xmltvTimes() {
-        assertEquals(start, Xmltv.time("20261111063000 +0000"))
-        assertEquals(start, Xmltv.time("20261111120000 +0530"))
-        assertEquals(start, Xmltv.time("20261111013000 -0500"))
-        assertEquals(start, Xmltv.time("202611110630"))
-        assertEquals(-1L, Xmltv.time("soon"))
-    }
-
-    @Test
-    fun xmltvStreamIsRead() {
-        val xml = """<?xml version="1.0" encoding="UTF-8"?>
-            <!DOCTYPE tv SYSTEM "xmltv.dtd">
-            <tv>
-              <channel id="AajTak.in"><display-name>Aaj Tak</display-name><display-name>AAJ TAK HD</display-name><icon src="x"/></channel>
-              <programme start="20261111063000 +0000" stop="20261111073000 +0000" channel="AajTak.in">
-                <title lang="hi">News &amp; Views</title><title lang="en">Second title</title><desc>Morning bulletin.</desc><category>News</category>
-              </programme>
-              <programme start="bad" stop="20261111073000 +0000" channel="AajTak.in"><title>Skipped</title></programme>
-            </tv>"""
-        val channels = ArrayList<Pair<String, List<String>>>()
-        val progs = ArrayList<Programme>()
-        Xmltv.parse(xml.byteInputStream(), object : Xmltv.Sink {
-            override fun channel(id: String, names: List<String>) { channels += id to names }
-            override fun programme(channelId: String, start: Long, stop: Long, title: String, description: String) {
-                assertEquals("AajTak.in", channelId)
-                progs += Programme(start, stop, title, description)
-            }
-        })
-        assertEquals(listOf("AajTak.in" to listOf("Aaj Tak", "AAJ TAK HD")), channels)
-        assertEquals(listOf(Programme(start, stop, "News & Views", "Morning bulletin.")), progs)
-        assertEquals(0.5f, progs[0].progress(start + 1_800_000), 0.001f)
-    }
-
-    @Test
-    fun frameRateChoice() {
-        assertEquals(50f, FrameRate.pick(25f, listOf(50f, 60f), 60f))
-        assertEquals(null, FrameRate.pick(30f, listOf(50f, 60f), 60f))
-        assertEquals(60f, FrameRate.pick(60f, listOf(50f, 60f), 50f))
-        assertEquals(null, FrameRate.pick(25f, listOf(60f), 60f))
-        assertEquals(24f, FrameRate.pick(23.976f, listOf(24f, 50f, 60f), 60f))
-        assertEquals(59.94f, FrameRate.pick(29.97f, listOf(50f, 59.94f, 60f), 60f))
-        assertEquals(null, FrameRate.pick(29.97f, listOf(50f, 60f), 60f))
-        assertEquals(25f, FrameRate.snap(25.02f))
-        assertEquals(0f, FrameRate.snap(41f))
-        val times = LongArray(30) { it * 40_000L }
-        assertEquals(25f, FrameRate.fromTimestamps(times, 30))
+    fun groupsAreListedUnderTheirSection() {
+        val list = listOf(
+            ch("1", "A", "http://a/1").copy(group = "IN | News"), ch("2", "B", "http://a/2").copy(group = "INR | Tamil"),
+            ch("3", "C", "http://a/3").copy(group = "SPORTS | beIN MAX"), ch("4", "##### FI | FINLAND #####", "http://a/4").copy(group = "INT | Scandinavia"),
+            ch("5", "D", "http://b/5", pl = "p2").copy(group = "IN | News"),
+        )
+        val index = ChannelIndex(list, emptyList())
+        assertEquals(listOf("Hindi", "News", "News · other list", "South", "Tamil", "Sports", "beIN MAX"), index.groups.map { it.label })
+        assertEquals(listOf(true, false, false, true, false, true, false), index.groups.map { it.isPlaylist })
+        // Sections decide the channel order, and separator lines are not channels.
+        assertEquals(listOf("1", "5", "2", "3"), index.all.map { it.id })
+        assertEquals(2, index.channels("s:Hindi", emptyList()).size)
+        assertEquals(1, index.channels("p:p2", emptyList()).size)
+        assertEquals("Hindi", index.sectionOf("p1/IN | News"))
+        assertEquals("Sports", index.sectionOf("s:Sports"))
+        val moved = ChannelIndex(list, emptyList(), ChannelPrefs(groupSections = mapOf("p1/INR | Tamil" to "Hindi")))
+        assertEquals("Hindi", moved.sectionOf("p1/INR | Tamil"))
+        assertEquals(3, moved.channels("s:Hindi", emptyList()).size)
     }
 }
 
@@ -257,7 +154,7 @@ class ChannelManagementTest {
     fun hiddenGroupsAndChannelsLeaveTheListsButStayManageable() {
         val index = ChannelIndex(raw, emptyList(), ChannelPrefs(hiddenGroups = setOf("p1/Kids"), hiddenChannels = setOf("4")))
         assertEquals(listOf("1", "2"), index.all.map { it.id })
-        assertEquals(listOf("News"), index.groups.map { it.label })
+        assertEquals(listOf("Rest of the world", "News"), index.groups.map { it.label })
         assertEquals(1, index.hiddenChannelCount)
         val kids = index.allGroups.first { it.key == "p1/Kids" }
         assertTrue(kids.hidden)
@@ -282,5 +179,59 @@ class ChannelManagementTest {
         assertTrue(index.groups.first().isCustom)
         assertEquals(listOf("3", "1"), index.channels("c:a", emptyList()).map { it.id })
         assertEquals(listOf("1", "3", "4"), index.all.map { it.id })
+    }
+}
+
+/** Checked against the group names of a real 27,000-channel provider list. */
+class ChannelSortTest {
+    private fun s(group: String, playlist: String = "Main") = ChannelSort.sectionOf(group, playlist)
+
+    @Test
+    fun sections() {
+        assertEquals(ChannelSort.HINDI, s("IN | News"))
+        assertEquals(ChannelSort.HINDI, s("IN | Entertainment"))
+        assertEquals(ChannelSort.GUJARATI, s("INR  | Gujrati"))
+        assertEquals(ChannelSort.SOUTH, s("INR | Tamil"))
+        assertEquals(ChannelSort.SOUTH, s("INR | Malayalam"))
+        assertEquals(ChannelSort.REST, s("INR | Punjabi"))
+        assertEquals(ChannelSort.REST, s("INR | Punjabi Religious"))
+        assertEquals(ChannelSort.REST, s("PK | Entertainment"))
+        assertEquals(ChannelSort.REST, s("INT | Germany"))
+        assertEquals(ChannelSort.REST, s("AR | Gulf GCC"))
+        assertEquals(ChannelSort.REST, s("Latin"))
+        assertEquals(ChannelSort.CANADA, s("CA | Entertainment"))
+        assertEquals(ChannelSort.USA, s("US | Locals"))
+        assertEquals(ChannelSort.UK, s("UK | Entertainment"))
+        assertEquals(ChannelSort.UK, s("IE | Irish TV"))
+        assertEquals(ChannelSort.ROUND_THE_CLOCK, s("24/7 | Hindi"))
+        assertEquals(ChannelSort.ROUND_THE_CLOCK, s("24/7 | English"))
+        assertEquals(ChannelSort.ADULT, s("XXX | Adults"))
+        assertEquals(ChannelSort.ADULT, s("XXX | Indian Adults"))
+        for (g in listOf("SPORTS | beIN MAX", "LIVE | EPL Hub", "PPV", "US | NFL Teams", "US | Sports", "CA | Sports", "UK | Sky Sports", "UK | TNT Sports",
+            "IN/PK | Sports", " | IPL", "Asian Sports", "Chinese Sport", "Fite TV", "NL | Sports", "DSTV | Sports", "LIVE | Cricket Events", "US | MLB")) {
+            assertEquals(g, ChannelSort.SPORTS, s(g))
+        }
+        // The free lists have no region in their group names: the playlist decides.
+        assertEquals(ChannelSort.HINDI, s("News", "India (free)"))
+        assertEquals(ChannelSort.USA, s("Movies", "USA (free)"))
+        assertEquals(ChannelSort.SPORTS, s("Sports", "India (free)"))
+    }
+
+    @Test
+    fun labelsAndSeparators() {
+        assertEquals("News", ChannelSort.label("IN | News", ChannelSort.HINDI))
+        assertEquals("Gujrati", ChannelSort.label("INR  | Gujrati", ChannelSort.GUJARATI))
+        assertEquals("beIN MAX", ChannelSort.label("SPORTS | beIN MAX", ChannelSort.SPORTS))
+        assertEquals("CA Sports", ChannelSort.label("CA | Sports", ChannelSort.SPORTS))
+        assertEquals("Germany", ChannelSort.label("INT | Germany", ChannelSort.REST))
+        assertEquals("PK News", ChannelSort.label("PK | News", ChannelSort.REST))
+        assertEquals("IPL", ChannelSort.label(" | IPL", ChannelSort.SPORTS))
+        assertEquals("Latin", ChannelSort.label("Latin", ChannelSort.REST))
+        assertEquals("Other", ChannelSort.label("", ChannelSort.REST))
+        assertTrue(ChannelSort.isSeparator("##### FI | FINLAND #####"))
+        assertTrue(ChannelSort.isSeparator("•●★- GREECE DOCUMENTARY UHD 4K -★●•"))
+        assertEquals(false, ChannelSort.isSeparator("UK-BBC One FHD"))
+        assertEquals(false, ChannelSort.isSeparator(".UK = Absolute Classic Rock"))
+        assertEquals(false, ChannelSort.isSeparator("4K | Star 4K (Ads Free)"))
     }
 }

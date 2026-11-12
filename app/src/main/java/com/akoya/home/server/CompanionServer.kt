@@ -115,6 +115,8 @@ class CompanionServer private constructor(private val ctx: Context) : NanoHTTPD(
                     json(Response.Status.BAD_REQUEST, JSONObject().put("error", e.message ?: "Couldn't use that link"))
                 }
             }
+            path == "/crash" && m == Method.GET ->
+                text(Response.Status.OK, com.akoya.home.AkoyaApp.crashFile?.takeIf { it.isFile }?.readText() ?: "No crash has been recorded.")
             path == "/livetv/export" && m == Method.GET ->
                 LiveTvStore.get(ctx).exportCsv().let { f -> fileResponse(f).also { it.addHeader("Content-Disposition", "attachment; filename=\"${f.name}\"") } }
             // The film or series library as a spreadsheet file, for sorting it out on a computer.

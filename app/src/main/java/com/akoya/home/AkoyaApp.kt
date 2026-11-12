@@ -11,6 +11,36 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 /** App-wide set-up. Today that is just how pictures (logos, posters, wallpapers) are loaded. */
 class AkoyaApp : Application(), ImageLoaderFactory {
 
+    override fun onCreate() {
+        super.onCreate()
+        crashFile = java.io.File(filesDir, "last-crash.txt")
+        version = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull().orEmpty()
+        // Keep what went wrong, so it can be read from the phone page instead of needing a cable.
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+            write("Crash on thread ${thread.name}", error)
+            previous?.uncaughtException(thread, error)
+        }
+    }
+
+    companion object {
+        @Volatile var crashFile: java.io.File? = null
+            private set
+        private var version = ""
+
+        /** Records a problem that was caught and survived, in the same place as crashes. */
+        fun note(where: String, error: Throwable) = write("Caught: $where", error)
+
+        private fun write(title: String, error: Throwable) {
+            runCatching {
+                val f = crashFile ?: return
+                val trace = java.io.StringWriter().also { error.printStackTrace(java.io.PrintWriter(it)) }.toString()
+                val stamp = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())
+                f.writeText("$title\n$stamp  ·  version $version  ·  ${android.os.Build.MODEL}, Android ${android.os.Build.VERSION.RELEASE}\n\n${trace.take(12_000)}")
+            }
+        }
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     override fun newImageLoader(): ImageLoader = ImageLoader.Builder(this)
         // No fade-in: on a slow TV dozens of fading tiles cost more than they add.
