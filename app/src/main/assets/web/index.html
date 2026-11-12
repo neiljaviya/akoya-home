@@ -192,9 +192,9 @@ nav button.on{color:var(--kumo)}
     <select id="liveReplace"><option value="">A new playlist</option></select>
     <p class="muted">Replacing keeps your favourites, categories, renames and hidden channels, matched to the new provider's channels by name.</p>
     <div class="row" style="margin-top:14px"><span class="muted grow" id="liveState"></span><button id="liveAdd">Add playlist</button></div>
-    <label>Library export</label>
-    <div class="row"><a class="btn ghost" id="expMovies" href="#">Movies (.csv)</a><a class="btn ghost" id="expSeries" href="#">Series (.csv)</a></div>
-    <p class="muted">Every title with its category, year and rating, to open in Excel or Sheets.</p>
+    <label>Export</label>
+    <div class="row"><a class="btn ghost" id="expChannels" href="#">Channels (.csv)</a><a class="btn ghost" id="expMovies" href="#">Movies (.csv)</a><a class="btn ghost" id="expSeries" href="#">Series (.csv)</a></div>
+    <p class="muted">Every channel with its group, and every title with its region, genres, category, year and rating, to open in Excel or Sheets.</p>
   </div>
   <div class="card">
     <div class="eyebrow">This phone</div>
@@ -454,7 +454,7 @@ function renderLive(d) {
   sel.innerHTML = '<option value="">A new playlist</option>' + d.playlists.map(p => `<option value="${p.id}">Replace the source of ${esc(p.name)}</option>`).join('');
   sel.value = keep;
   if (d.notice) $('#liveState').textContent = d.notice;
-  $('#expMovies').href = '/api/vod/export?' + q({ kind: 'movies', pin: PIN }); $('#expSeries').href = '/api/vod/export?' + q({ kind: 'series', pin: PIN });
+  $('#expChannels').href = '/api/livetv/export?' + q({ pin: PIN }); $('#expMovies').href = '/api/vod/export?' + q({ kind: 'movies', pin: PIN }); $('#expSeries').href = '/api/vod/export?' + q({ kind: 'series', pin: PIN });
   clearTimeout(liveTimer);
   if (d.playlists.some(p => p.loading || p.guideLoading)) liveTimer = setTimeout(loadLive, 2000);
 }

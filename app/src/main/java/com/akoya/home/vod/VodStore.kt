@@ -10,6 +10,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -37,6 +38,16 @@ data class VodItem(
     val series: Boolean,
     val plot: String = "",
     val year: String = "",
+    /** The provider's own genre text, when its list has one. */
+    val genreText: String = "",
+    // ---- worked out when the library is arranged
+    /** The name without the provider's year, language and quality trimmings. */
+    val title: String = name,
+    /** Same for every copy of this film or series, however it is filed. */
+    val tkey: String = "",
+    val region: Region = Region.HOLLYWOOD,
+    val genres: List<String> = emptyList(),
+    val era: String = "",
 )
 
 /** A provider category: [raw] is the provider's name, [display] the tidied one. */
@@ -48,10 +59,54 @@ class VodCategory(val key: String, val raw: String, val display: String, val fac
 /** A row on the library's home screen: a short [items] preview of the longer [all]. */
 class VodRow(val key: String, val title: String, val items: List<VodItem>, val all: List<VodItem> = items)
 
-/** A whole library of one kind. */
-class VodCatalog(val items: List<VodItem>, val categories: List<VodCategory>) {
+/** A tile on the Categories screen: a genre, a year, or one of the provider's collections. */
+class Shelf(val key: String, val name: String, val items: List<VodItem>)
+
+/**
+ * A whole library of one kind. Providers file the same film several times (by year, in 4K,
+ * under a genre), so [titles] holds each film once per region and [versions] its copies.
+ */
+class VodCatalog(val items: List<VodItem>, val categories: List<VodCategory>, eraOrder: List<String>) {
     val byCategory: Map<String, List<VodItem>> = categories.associate { it.key to it.items }
-    val byTitle: Map<String, VodItem> by lazy { HashMap<String, VodItem>(items.size * 2).also { m -> for (i in items) m.putIfAbsent(i.titleKey, i) } }
+    val versions: Map<String, List<VodItem>> = items.groupBy { it.tkey }
+    val titles: List<VodItem>
+    val byTitle: Map<String, VodItem>
+    private val eras = eraOrder
+
+    init {
+        val seen = HashSet<String>(items.size * 2)
+        val one = ArrayList<VodItem>(items.size)
+        // Prefer the copy filed under a plain language shelf over the 4K, genre or multi-audio copy.
+        for (pass in 0..1) for (i in items) {
+            val plain = !i.name.contains("multi", ignoreCase = true)
+            if ((pass == 0) == plain && seen.add(i.region.name + i.tkey)) one += i
+        }
+        titles = one
+        byTitle = HashMap<String, VodItem>(one.size * 2).also { m -> for (i in one) m.putIfAbsent(i.tkey, i) }
+    }
+
+    fun titles(region: Region?): List<VodItem> = if (region == null) titles.distinctBy { it.tkey } else titles.filter { it.region == region }
+
+    /** Genre tiles for a region, in the usual order, with how many titles are tagged. */
+    fun genreShelves(region: Region?): List<Shelf> {
+        val by = HashMap<String, MutableList<VodItem>>()
+        for (i in titles(region)) for (g in i.genres) by.getOrPut(g) { ArrayList() }.add(i)
+        return VodSort.GENRES.mapNotNull { g -> by[g]?.let { Shelf("g:$g", g, it) } }
+    }
+
+    fun yearShelves(region: Region?): List<Shelf> {
+        val by = titles(region).filter { it.era.isNotEmpty() }.groupBy { it.era }
+        return eras.mapNotNull { e -> by[e]?.let { Shelf("y:$e", e, it) } }
+    }
+
+    /** The provider's categories that aren't just a genre or a language-and-year: franchises, trending, 4K, networks. */
+    fun collections(region: Region?): List<Pair<VodCategory, List<VodItem>>> = categories.mapNotNull { c ->
+        if (VodSort.genreOfCategory(c.raw) != null || VodSort.isLanguageYearShelf(c.raw)) return@mapNotNull null
+        val list = (if (region == null) c.items else c.items.filter { it.region == region || (region == Region.BOLLYWOOD && "multi" in c.raw.lowercase()) }).distinctBy { it.tkey }
+        if (list.isEmpty()) null else c to list
+    }
+
+    fun untagged(region: Region?): Int = titles(region).count { it.genres.isEmpty() }
 }
 
 /** What the user has chosen for the library. Categories are named, titles are keyed by title. */
@@ -60,11 +115,18 @@ data class VodPrefs(
     val pinned: List<String> = emptyList(),
     val myList: List<String> = emptyList(),
     val history: List<Watch> = emptyList(),
-)
+    /** The region last browsed ("" for everything). */
+    val region: String = "",
+) {
+    val regionOrNull: Region? get() = Region.entries.firstOrNull { it.name == region }
+}
 
 enum class VodOrder(val label: String) { ADDED("Recently added"), NAME("A to Z"), RATING("Top rated"), YEAR("Newest first") }
 
-val VodItem.titleKey: String get() = VodSort.titleKey(name, series)
+val VodItem.titleKey: String get() = tkey.ifEmpty { VodSort.titleKey(name, series) }
+
+/** Progress of a genre-tagging run. */
+data class TagRun(val done: Int, val total: Int, val found: Int, val running: Boolean)
 
 class MovieInfo(val plot: String, val genre: String, val year: String, val duration: String, val rating: String, val cast: String, val director: String, val backdrop: String, val ext: String)
 
@@ -125,22 +187,126 @@ class VodStore private constructor(private val context: Context) {
                     }.onFailure { failure = it; Log.w(TAG, "Library for ${a.name} failed", it) }
                 }
                 if (items.isEmpty()) throw failure ?: IllegalStateException("The provider's ${kind.label.lowercase()} library is empty")
-                arrange(items, categories).also { catalogs[kind] = it }
+                arrange(kind, items, categories).also { catalogs[kind] = it }
             }
         }
     }
 
-    private fun arrange(items: List<VodItem>, categories: Map<String, String>): VodCatalog {
+    private fun arrange(kind: VodKind, raw: List<VodItem>, categories: Map<String, String>): VodCatalog {
+        val learned = readGenres(kind)
+        // First pass: clean titles, and note which titles the provider filed under a genre shelf.
+        val keys = ArrayList<String>(raw.size)
+        val shelfGenres = HashMap<String, MutableSet<String>>()
+        for (i in raw) {
+            val key = VodSort.titleKey(i.name, i.series)
+            keys += key
+            val set = shelfGenres.getOrPut(key) { LinkedHashSet(2) }
+            VodSort.genreOfCategory(categories[i.category].orEmpty())?.let { set += it }
+            if (i.genreText.isNotBlank()) set += VodSort.genresOf(i.genreText)
+            learned[key]?.let { set += it }
+        }
+        // Second pass: every copy of a title gets the title's genres, its region and its year shelf.
+        val items = ArrayList<VodItem>(raw.size)
+        raw.forEachIndexed { n, i ->
+            val key = keys[n]
+            val year = i.year.toIntOrNull() ?: 0
+            items += i.copy(
+                title = VodSort.cleanTitle(i.name), tkey = key,
+                region = VodSort.regionOf(i.name, categories[i.category].orEmpty()),
+                genres = shelfGenres[key]?.let { g -> VodSort.GENRES.filter { it in g } }.orEmpty(),
+                era = VodSort.eraOf(year, thisYear),
+            )
+        }
         val grouped = LinkedHashMap<String, MutableList<VodItem>>()
         for (k in categories.keys) grouped[k] = ArrayList()
         for (i in items) grouped.getOrPut(i.category) { ArrayList() }.add(i)
         val out = ArrayList<VodCategory>()
         for ((k, list) in grouped) {
             if (list.isEmpty()) continue
-            val raw = categories[k] ?: "Other"
-            out += VodCategory(k, raw, VodSort.display(raw), VodSort.classify(raw), VodSort.yearOf(raw), list)
+            val name = categories[k] ?: "Other"
+            out += VodCategory(k, name, VodSort.display(name), VodSort.classify(name), VodSort.yearOf(name), list)
         }
-        return VodCatalog(items, out)
+        val eras = (thisYear + 1 downTo thisYear - 6).map { it.toString() } + listOf("2010s", "2000s", "90s", "80s", "Classics")
+        return VodCatalog(items, out, eras)
+    }
+
+    // ------------------------------------------------------------------ genres learned title by title
+
+    private fun genreFile(kind: VodKind) = File(dir, "genres_${kind.name.lowercase()}.tsv")
+    private val learnedNow = HashMap<VodKind, HashMap<String, List<String>>>()
+
+    private fun readGenres(kind: VodKind): HashMap<String, List<String>> = synchronized(learnedNow) {
+        learnedNow.getOrPut(kind) {
+            val m = HashMap<String, List<String>>()
+            runCatching {
+                genreFile(kind).takeIf { it.isFile }?.forEachLine { line ->
+                    val t = line.indexOf('\t')
+                    if (t > 0) m[line.substring(0, t)] = line.substring(t + 1).split(',').filter { it.isNotBlank() }
+                }
+            }
+            m
+        }
+    }
+
+    /** Remembers a title's genres (from its detail page or the tagging run). An empty list means "looked, none given". */
+    private fun learn(kind: VodKind, key: String, genres: List<String>) {
+        val m = readGenres(kind)
+        synchronized(learnedNow) {
+            if (m[key] == genres) return
+            m[key] = genres
+            runCatching { genreFile(kind).appendText(key + "\t" + genres.joinToString(",") + "\n") }
+        }
+    }
+
+    /** Progress of a "tag more titles by genre" run; null when none has been started. */
+    private val _tagging = MutableStateFlow<TagRun?>(null)
+    val tagging: StateFlow<TagRun?> = _tagging.asStateFlow()
+    private var tagJob: kotlinx.coroutines.Job? = null
+    private val tagScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + com.akoya.home.livetv.Background.dispatcher)
+
+    /**
+     * Asks the provider for the details of each film that has no genre yet, one at a time and
+     * unhurried, and files the film under what comes back. Results are kept, so a run can be
+     * stopped and picked up again. The library is re-sorted when it ends.
+     */
+    fun tagGenres(region: Region?) {
+        val catalog = catalogs[VodKind.MOVIES] ?: return
+        tagJob?.cancel()
+        val known = readGenres(VodKind.MOVIES)
+        val todo = catalog.titles(region).filter { it.genres.isEmpty() && it.tkey !in known }
+        if (todo.isEmpty()) { _tagging.value = TagRun(0, 0, 0, running = false); return }
+        _tagging.value = TagRun(0, todo.size, 0, running = true)
+        tagJob = tagScope.launch {
+            var done = 0
+            var found = 0
+            try {
+                for (item in todo) {
+                    val info = movieInfo(item)
+                    done++
+                    if (info != null) {
+                        val g = VodSort.genresOf(info.genre)
+                        learn(VodKind.MOVIES, item.tkey, g)
+                        if (g.isNotEmpty()) found++
+                    }
+                    _tagging.value = TagRun(done, todo.size, found, running = true)
+                    kotlinx.coroutines.delay(900)
+                }
+            } finally {
+                _tagging.value = TagRun(done, todo.size, found, running = false)
+                if (found > 0) rearrange(VodKind.MOVIES)
+            }
+        }
+    }
+
+    fun stopTagging() { tagJob?.cancel() }
+
+    /** Goes up whenever a library has been re-sorted, so screens fetch it again. */
+    private val _revision = MutableStateFlow(0)
+    val revision: StateFlow<Int> = _revision.asStateFlow()
+
+    private fun rearrange(kind: VodKind) {
+        synchronized(catalogs) { catalogs.remove(kind) }
+        _revision.value++
     }
 
     // ------------------------------------------------------------------ the user's arrangement
@@ -152,7 +318,7 @@ class VodStore private constructor(private val context: Context) {
         val next = transform(_prefs.value)
         _prefs.value = next
         val o = JSONObject()
-            .put("hidden", JSONArray(next.hidden.toList())).put("pinned", JSONArray(next.pinned)).put("myList", JSONArray(next.myList))
+            .put("hidden", JSONArray(next.hidden.toList())).put("pinned", JSONArray(next.pinned)).put("myList", JSONArray(next.myList)).put("region", next.region)
             .put("history", JSONArray().also { a -> next.history.forEach { a.put(JSONObject().put("t", it.titleKey).put("c", it.category).put("at", it.at)) } })
         prefs0.edit().putString("prefs", o.toString()).apply()
     }
@@ -162,7 +328,7 @@ class VodStore private constructor(private val context: Context) {
         fun strings(name: String): List<String> = o.optJSONArray(name)?.let { a -> (0 until a.length()).map { a.optString(it) }.filter { it.isNotBlank() } }.orEmpty()
         val h = o.optJSONArray("history")
         VodPrefs(
-            hidden = strings("hidden").toSet(), pinned = strings("pinned"), myList = strings("myList"),
+            hidden = strings("hidden").toSet(), pinned = strings("pinned"), myList = strings("myList"), region = o.optString("region"),
             history = (0 until (h?.length() ?: 0)).mapNotNull { i -> h?.optJSONObject(i)?.let { Watch(it.optString("t"), it.optString("c"), it.optLong("at")) } },
         )
     }.getOrDefault(VodPrefs())
@@ -176,52 +342,71 @@ class VodStore private constructor(private val context: Context) {
         it.copy(history = (listOf(Watch(titleKey, categoryName, System.currentTimeMillis())) + it.history.filterNot { w -> w.titleKey == titleKey }).take(80))
     }
 
+    /** Other copies of the same title in the same region (the 4K one, the multi-audio one), with a label for each. */
+    fun versions(kind: VodKind, item: VodItem): List<Pair<String, VodItem>> {
+        val c = catalogs[kind] ?: return emptyList()
+        val names = c.categories.associate { it.key to it.display }
+        return c.versions[item.tkey].orEmpty().filter { it.key != item.key && it.region == item.region }
+            .map { (names[it.category] ?: "Another copy") to it }.distinctBy { it.first }.take(4)
+    }
+
     fun categoryName(kind: VodKind, item: VodItem): String =
         catalogs[kind]?.categories?.firstOrNull { it.key == item.category }?.prefKey.orEmpty()
 
     fun sorted(items: List<VodItem>, order: VodOrder): List<VodItem> = when (order) {
         VodOrder.ADDED -> items.sortedByDescending { it.added }
-        VodOrder.NAME -> items.sortedBy { it.name.lowercase() }
+        VodOrder.NAME -> items.sortedBy { it.title.lowercase() }
         VodOrder.RATING -> items.sortedByDescending { it.rating.toFloatOrNull() ?: 0f }
         VodOrder.YEAR -> items.sortedByDescending { it.year.toIntOrNull() ?: 0 }
     }
 
+    fun setRegion(region: Region?) = change { it.copy(region = region?.name.orEmpty()) }
+
     /**
-     * The library's home screen: the user's own rows first, then what's new, then a handful
-     * of the provider's shelves that most people want (trending, this year's, 4K, kids).
+     * The library's home screen for one region (or everything): the user's own rows, what's
+     * new, what's trending, then a row per genre. Every film appears once.
      */
-    fun homeRows(catalog: VodCatalog, prefs: VodPrefs): List<VodRow> {
+    fun homeRows(catalog: VodCatalog, prefs: VodPrefs, region: Region?): List<VodRow> {
         val rows = ArrayList<VodRow>()
-        val used = HashSet<String>()
-        val shown = catalog.categories.filter { it.prefKey !in prefs.hidden }
-        fun preview(list: List<VodItem>) = list.sortedByDescending { it.added }.take(HOME_ROW)
-        fun shelf(c: VodCategory, title: String = c.display) {
-            if (rows.size < 14 && used.add(c.key)) rows += VodRow(c.key, title, preview(c.items), c.items)
+        val titles = catalog.titles(region)
+        fun newest(list: List<VodItem>) = list.sortedByDescending { it.added }
+        fun add(key: String, title: String, all: List<VodItem>, min: Int = 1) {
+            if (all.size >= min && rows.size < 18) rows += VodRow(key, title, all.take(HOME_ROW), all)
         }
 
         val mine = prefs.myList.mapNotNull { catalog.byTitle[it] }
-        if (mine.isNotEmpty()) rows += VodRow("__mylist", "My list", mine.take(HOME_ROW), mine)
+        add("__mylist", "My list", mine)
 
-        // Recommendations work on category names, so they carry across providers.
-        val byName = shown.associate { it.prefKey to it.items }
-        val picks = VodSort.recommend(byName, prefs.history, HOME_ROW)
-        if (picks.size >= 6) rows += VodRow("__foryou", "Recommended for you", picks)
-        prefs.history.maxByOrNull { it.at }?.let { last ->
-            val title = catalog.byTitle[last.titleKey]?.name ?: return@let
-            val more = byName[last.category].orEmpty().filter { it.titleKey != last.titleKey }.sortedByDescending { it.rating.toFloatOrNull() ?: 0f }
-            if (more.size >= 6) rows += VodRow("__because", "Because you watched $title", more.take(HOME_ROW), more)
+        // Recommendations: the genres and shelves of what was watched lately, within this region.
+        val watched = prefs.history.sortedByDescending { it.at }
+        if (watched.isNotEmpty()) {
+            val seen = watched.mapTo(HashSet()) { it.titleKey }
+            val taste = HashMap<String, Float>()
+            watched.forEachIndexed { n, w ->
+                val weight = 1f / (1f + n * 0.25f)
+                catalog.byTitle[w.titleKey]?.genres?.forEach { g -> taste[g] = (taste[g] ?: 0f) + weight }
+            }
+            if (taste.isNotEmpty()) {
+                val picks = titles.asSequence().filter { it.tkey !in seen && it.genres.isNotEmpty() }
+                    .map { i -> (i.genres.sumOf { (taste[it] ?: 0f).toDouble() }.toFloat() * 4f + (i.rating.toFloatOrNull() ?: 0f) + if (i.era.length == 4) 2f else 0f) to i }
+                    .filter { it.first > 6f }.sortedByDescending { it.first }.take(HOME_ROW).map { it.second }.toList()
+                add("__foryou", "Recommended for you", picks, min = 6)
+            }
+            val last = watched.first()
+            catalog.byTitle[last.titleKey]?.let { t ->
+                val g = t.genres.firstOrNull() ?: return@let
+                val more = titles.filter { g in it.genres && it.tkey != t.tkey && it.region == t.region }.sortedByDescending { it.rating.toFloatOrNull() ?: 0f }
+                add("__because", "Because you watched ${t.title}", more, min = 6)
+            }
         }
 
-        val recent = catalog.items.asSequence().filter { it.added > 0 }.sortedByDescending { it.added }.take(HOME_ROW * 2).toList()
-        if (recent.size >= 6) rows += VodRow("__recent", "Recently added", recent.take(HOME_ROW), recent)
+        add("__recent", "Recently added", newest(titles.filter { it.added > 0 }).take(HOME_ROW * 3), min = 6)
 
-        for (key in prefs.pinned) shown.firstOrNull { it.prefKey == key }?.let { shelf(it) }
-        shown.firstOrNull { c -> TRENDING.any { it in c.raw.lowercase() } }?.let { shelf(it) }
-        val newest = shown.filter { it.facet == Facet.LANGUAGE || it.facet == Facet.YEAR }.maxOfOrNull { it.year } ?: 0
-        if (newest > 0) shown.filter { it.year == newest && (it.facet == Facet.LANGUAGE || it.facet == Facet.YEAR) }.take(4).forEach { shelf(it) }
-        shown.firstOrNull { it.facet == Facet.UHD }?.let { shelf(it) }
-        shown.firstOrNull { it.facet == Facet.KIDS }?.let { shelf(it) }
-        return rows
+        val shown = catalog.collections(region).filter { it.first.prefKey !in prefs.hidden }
+        for (key in prefs.pinned) shown.firstOrNull { it.first.prefKey == key }?.let { (c, list) -> add(c.key, c.display, newest(list)) }
+        shown.filter { (c, _) -> TRENDING.any { it in c.raw.lowercase() } }.take(2).forEach { (c, list) -> add(c.key, c.display, newest(list), min = 4) }
+        for (shelf in catalog.genreShelves(region)) add(shelf.key, shelf.name, newest(shelf.items), min = 8)
+        return rows.distinctBy { it.key }
     }
 
     /** The library as a spreadsheet file (CSV), or null when it can't be loaded. */
@@ -232,10 +417,10 @@ class VodStore private constructor(private val context: Context) {
         fun cell(s: String) = "\"" + s.replace("\"", "\"\"") + "\""
         val day = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
         file.bufferedWriter().use { w ->
-            w.write("\uFEFFTitle,Year,Category,Shelf,Rating,Added,Id\n")
+            w.write("\uFEFFTitle,Year,Region,Genres,Category,Rating,Added,Id\n")
             for (i in catalog.items) {
                 val raw = names[i.category].orEmpty()
-                w.write(listOf(cell(i.name), i.year, cell(raw), cell(VodSort.classify(raw).title), i.rating, if (i.added > 0) day.format(java.util.Date(i.added * 1000)) else "", i.id).joinToString(","))
+                w.write(listOf(cell(i.name), i.year, i.region.label, cell(i.genres.joinToString(", ")), cell(raw), i.rating, if (i.added > 0) day.format(java.util.Date(i.added * 1000)) else "", i.id).joinToString(","))
                 w.write("\n")
             }
         }
@@ -270,7 +455,7 @@ class VodStore private constructor(private val context: Context) {
             if (r.peek() != JsonToken.BEGIN_ARRAY) throw IllegalStateException("The provider didn't return a library")
             r.beginArray()
             while (r.hasNext()) {
-                var id = ""; var name = ""; var poster = ""; var cat = ""; var rating = ""; var added = 0L; var ext = ""; var plot = ""; var year = ""
+                var id = ""; var name = ""; var poster = ""; var cat = ""; var rating = ""; var added = 0L; var ext = ""; var plot = ""; var year = ""; var genre = ""
                 r.beginObject()
                 while (r.hasNext()) {
                     when (r.nextName()) {
@@ -282,6 +467,7 @@ class VodStore private constructor(private val context: Context) {
                         "added", "last_modified" -> added = r.text().toLongOrNull() ?: 0L
                         "container_extension" -> ext = r.text()
                         "plot" -> plot = r.text().take(600)
+                        "genre" -> genre = r.text().take(120)
                         "releaseDate", "release_date", "year" -> r.text().take(4).let { if (it.length == 4 && it.all(Char::isDigit)) year = it }
                         else -> r.skipValue()
                     }
@@ -291,7 +477,7 @@ class VodStore private constructor(private val context: Context) {
                     into += VodItem(
                         key = a.playlistId + (if (series) ":s:" else ":m:") + id, id = id, playlistId = a.playlistId, name = name.trim(),
                         poster = poster, category = a.playlistId + ":" + cat, rating = rating.takeIf { it.toFloatOrNull()?.let { v -> v > 0f } == true }.orEmpty(),
-                        added = added, ext = ext, series = series, plot = plot,
+                        added = added, ext = ext, series = series, plot = plot, genreText = genre,
                         year = year.ifBlank { VodSort.yearOf(name, thisYear + 1).takeIf { it > 0 }?.toString().orEmpty() },
                     )
                 }
@@ -330,6 +516,7 @@ class VodStore private constructor(private val context: Context) {
             val o = JSONObject(open(a.api("get_vod_info") + "&vod_id=" + item.id).use { it.reader().readText() })
             val info = o.optJSONObject("info") ?: JSONObject()
             val data = o.optJSONObject("movie_data") ?: JSONObject()
+            VodSort.genresOf(info.str("genre")).let { g -> if (g.isNotEmpty() && item.genres.isEmpty() && item.tkey.isNotEmpty()) learn(VodKind.MOVIES, item.tkey, g) }
             MovieInfo(
                 plot = info.str("plot").ifBlank { info.str("description") },
                 genre = info.str("genre"),
