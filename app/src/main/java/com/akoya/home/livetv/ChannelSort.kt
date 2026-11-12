@@ -36,7 +36,7 @@ object ChannelSort {
         val list = playlistName.lowercase()
         return when {
             p == "xxx" || "adult" in g || "+18" in g -> ADULT
-            p in SPORT_PREFIXES || SPORT_WORDS.any { it in g } -> SPORTS
+            p in SPORT_PREFIXES || g.trim() in SPORT_PREFIXES || SPORT_WORDS.any { it in g } -> SPORTS
             p == "24/7" -> ROUND_THE_CLOCK
             "gujarati" in g || "gujrati" in g -> GUJARATI
             SOUTH_WORDS.any { it in g } -> SOUTH

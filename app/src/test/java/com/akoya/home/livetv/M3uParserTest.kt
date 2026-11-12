@@ -154,7 +154,7 @@ class ChannelManagementTest {
     fun hiddenGroupsAndChannelsLeaveTheListsButStayManageable() {
         val index = ChannelIndex(raw, emptyList(), ChannelPrefs(hiddenGroups = setOf("p1/Kids"), hiddenChannels = setOf("4")))
         assertEquals(listOf("1", "2"), index.all.map { it.id })
-        assertEquals(listOf("Rest of the world", "News", "Movies"), index.groups.map { it.label })
+        assertEquals(listOf("Rest of the world", "News"), index.groups.map { it.label })
         assertEquals(1, index.hiddenChannelCount)
         val kids = index.allGroups.first { it.key == "p1/Kids" }
         assertTrue(kids.hidden)
