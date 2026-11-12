@@ -114,19 +114,19 @@ Hold OK while watching → **Picture quality**. The limit (1080p, 720p, 480p, 36
 
 The Live TV tab shows **Movies** and **Series** tiles when a playlist's provider has a library. That works for an Xtream login and for M3U links too: the account is read from the link, or from the channel links inside the playlist when the link itself doesn't show it.
 
-**Home** is a short, curated screen instead of every category at once:
+**Regions.** Every film and series is filed under Hollywood, Bollywood, South, Gujarati or Rest of the world, and the chips at the top of the library switch between them (or All). The title's own markers decide first (`[TUR]`, `[HIN+TAM]`, `(GUJARATI)`), then the provider's category. Hindi dubs count as Bollywood.
 
-- Continue watching, My list, **Recommended for you** and "Because you watched…" (from what you've watched for two minutes or more)
-- Recently added, any categories you pinned, then the provider's trending shelf, this year's shelves, 4K and kids
-- Each row shows the 30 newest titles and ends in "See all"
+**One entry per film.** Providers file the same film several times (by year, in 4K, under a genre, as multi-audio). The library shows it once, with the provider's trimmings removed from the title, and the film's page lists its **other copies** (for example the 4K one).
 
-**Categories** lists every provider category as a tile, filed under 4K, By language, By year, By era, Kids and family, and Collections, with the provider's "VOD |" prefixes tidied away. Hold OK on a tile to pin it to the home screen or hide it.
+**Home** for the chosen region: Continue watching, My list, Recommended for you and "Because you watched…" (by genre, from what you've watched for two minutes or more), Recently added, trending, then a row per genre. Each row shows 30 titles and ends in "See all".
 
-Inside a category, sort by Recently added, A to Z, Top rated or Newest first. **Hold OK** on any poster to add it to My list. Search shows each title once even when it sits in several categories.
+**Browse** (the Categories button) shows tiles for **Genres**, **By year** (each recent year, then 2010s, 2000s, 90s, 80s, Classics) and **Collections** (franchises, trending, 4K, networks). Hold OK on a collection to pin it to Home or hide it. Inside any tile, sort by Recently added, A to Z, Top rated or Newest first; hold OK on a poster adds it to My list.
 
-Your arrangement (pinned and hidden categories, My list, viewing history) is stored by name, so it survives a change of provider.
+**Genres** come from three places: the provider's own genre shelves, a genre field in the provider's list when it has one, and each film's detail page as you open it. For the films still untagged, **Tag more films by genre** on the Browse screen asks the provider about each one, about one a second, in the background. It can be stopped and resumed, and the library re-sorts itself when it ends.
 
-To sort the library out on a computer, the phone page (TV → Live TV playlists → Library export) downloads every title with its category, year and rating as a spreadsheet file.
+Your arrangement (pinned and hidden collections, My list, viewing history, learned genres) is stored by title and name, so it survives a change of provider.
+
+To sort things out on a computer, the phone page (TV → Live TV playlists → Export) downloads the channels, movies and series as spreadsheet files: channels with their group, playlist and guide id; titles with region, genres, category, year and rating.
 
 **While a film or episode plays**
 
