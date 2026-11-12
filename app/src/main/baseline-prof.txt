@@ -1,0 +1,10 @@
+# Baseline profile: tells Android to compile this code ahead of time instead of
+# interpreting it. On a slow TV that is the difference between a stuttering
+# first scroll and a smooth one. Compose brings its own profile; this covers
+# the launcher itself, the player and the image loader.
+HSPLcom/akoya/home/**;->**(**)**
+Lcom/akoya/home/**;
+HSPLandroidx/media3/**;->**(**)**
+Landroidx/media3/**;
+HSPLcoil/**;->**(**)**
+Lcoil/**;

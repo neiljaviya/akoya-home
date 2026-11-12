@@ -149,7 +149,9 @@ val PLAYLIST_PRESETS = listOf(
  */
 class LiveTvStore private constructor(private val context: Context) {
     private val prefs = context.getSharedPreferences("akoya_livetv", Context.MODE_PRIVATE)
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // Downloads, parsing and the guide database run on a few low-priority threads, so they
+    // never take the processor away from the picture or the remote.
+    private val scope = CoroutineScope(SupervisorJob() + Background.dispatcher)
     private val cacheDir = File(context.filesDir, "livetv").apply { mkdirs() }
     val guide = EpgStore.get(context)
 
@@ -192,6 +194,8 @@ class LiveTvStore private constructor(private val context: Context) {
             publish()
             guide.load()
             _ready.value = true
+            // Let the launcher and the first channel settle before any downloading starts.
+            delay(20_000)
             // Channel files saved by an older version don't know about catch-up: fetch them again.
             if (prefs.getInt(KEY_FORMAT, 1) < CACHE_FORMAT) {
                 prefs.edit().putInt(KEY_FORMAT, CACHE_FORMAT).apply()
@@ -270,7 +274,9 @@ class LiveTvStore private constructor(private val context: Context) {
         val p = current.playlists.firstOrNull { it.id == id } ?: return
         val urls = p.guideUrls()
         if (urls.isEmpty() || !p.enabled) return
-        val all = _channels.value
+        // Only channels that are shown need a guide: with most groups hidden this keeps the
+        // download quick and the database small.
+        val all = _index.value.all
         if (all.isEmpty()) return
         val ids = HashSet<String>()
         val names = HashSet<String>()
@@ -318,7 +324,7 @@ class LiveTvStore private constructor(private val context: Context) {
     }
 
     /** Downloads one playlist again. Keeps the old channels if the download fails. */
-    suspend fun refresh(id: String): Result<Int> = withContext(Dispatchers.IO) {
+    suspend fun refresh(id: String): Result<Int> = withContext(Background.dispatcher) {
         val p = current.playlists.firstOrNull { it.id == id } ?: return@withContext Result.failure(IllegalArgumentException("No such playlist"))
         if (!_loading.compareAndAdd(id)) return@withContext Result.success(p.channelCount)
         val result = runCatching {
@@ -424,8 +430,22 @@ class LiveTvStore private constructor(private val context: Context) {
 
     fun showAllChannels() = manage { it.copy(hiddenChannels = emptySet()) }
 
-    fun setGroupsHidden(keys: Collection<String>, hidden: Boolean) = manage {
-        it.copy(hiddenGroups = if (hidden) it.hiddenGroups + keys else it.hiddenGroups - keys.toSet())
+    fun setGroupsHidden(keys: Collection<String>, hidden: Boolean) {
+        manage { it.copy(hiddenGroups = if (hidden) it.hiddenGroups + keys else it.hiddenGroups - keys.toSet()) }
+        if (!hidden) guideSoon()
+    }
+
+    private var guideSoonJob: kotlinx.coroutines.Job? = null
+
+    /** Newly shown channels have no guide yet: fetch it once the user has stopped switching groups on. */
+    private fun guideSoon() {
+        synchronized(lock) {
+            guideSoonJob?.cancel()
+            guideSoonJob = scope.launch {
+                delay(45_000)
+                current.playlists.filter { it.enabled && it.guideUrls().isNotEmpty() }.forEach { refreshGuide(it.id) }
+            }
+        }
     }
 
     fun renameGroup(key: String, name: String) = manage {
@@ -580,9 +600,21 @@ class LiveTvStore private constructor(private val context: Context) {
         _channels.value = merged
     }
 
+    private var saveJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * Changes take effect at once; writing them to storage happens a moment later, off the
+     * main thread, and several quick changes (zapping, a health check) become one write.
+     */
     private fun updateState(transform: (LiveTvState) -> LiveTvState) {
-        val next = _state.updateAndGet(transform)
-        prefs.edit().putString(KEY, toJson(next).toString()).apply()
+        _state.updateAndGet(transform)
+        synchronized(prefs) {
+            saveJob?.cancel()
+            saveJob = scope.launch {
+                delay(400)
+                prefs.edit().putString(KEY, toJson(_state.value).toString()).apply()
+            }
+        }
     }
 
     private fun loadState(): LiveTvState {
@@ -801,12 +833,16 @@ class LiveTvStore private constructor(private val context: Context) {
         if (!f.isFile) return emptyList()
         return runCatching {
             f.bufferedReader().useLines { lines ->
+                // Thousands of channels share a few hundred group names (and mostly-empty fields):
+                // keep one copy of each instead of one per channel.
+                val shared = HashMap<String, String>()
+                fun one(s: String) = shared.getOrPut(s) { s }
                 lines.mapNotNull { line ->
                     val p = line.split('\t')
                     if (p.size < 8) null
                     else Channel(
-                        id = p[0], playlistId = id, name = p[1], url = p[2], logo = p[3], group = p[4], tvgId = p[5], userAgent = p[6], referrer = p[7],
-                        catchup = p.getOrElse(8) { "" }, catchupSource = p.getOrElse(9) { "" }, catchupDays = p.getOrNull(10)?.toIntOrNull() ?: 0,
+                        id = p[0], playlistId = id, name = p[1], url = p[2], logo = p[3], group = one(p[4]), tvgId = p[5], userAgent = one(p[6]), referrer = one(p[7]),
+                        catchup = one(p.getOrElse(8) { "" }), catchupSource = one(p.getOrElse(9) { "" }), catchupDays = p.getOrNull(10)?.toIntOrNull() ?: 0,
                     )
                 }.toList()
             }

@@ -145,6 +145,22 @@ To show favourite channels on Home, add the **Live TV** section in Settings → 
 
 Logins are stored only on the TV, in the app's private storage. They are not included in the settings backup.
 
+## Making it run smoothly on the TV
+
+A freshly installed app is *interpreted* by Android until the TV gets round to compiling it, which normally happens overnight while it's idle. Until then scrolling stutters, and every update starts that wait again. The app ships a compilation profile so the overnight pass does a thorough job, but you can also do it on the spot. With USB debugging on, from a computer (or a phone ADB app) on the same network:
+
+```
+adb connect <TV address>:5555
+adb shell cmd package compile -m speed -f com.akoya.home
+```
+
+It takes a minute or two and lasts until the next update, so run it again after installing a new build. This one step makes more difference on a modest TV than anything else.
+
+Other things that keep it light:
+
+- Hide the channel groups you don't watch (Live TV → Manage channels). The guide is only downloaded for channels that are shown.
+- Playlist and guide downloads wait 20 seconds after start-up and run at low priority, so they don't compete with the picture.
+
 ## Personalising with files
 
 Put files in these folders with `adb push` (no extra permissions needed):

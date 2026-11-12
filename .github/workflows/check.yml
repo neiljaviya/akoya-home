@@ -18,6 +18,10 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - run: chmod +x gradlew && ./gradlew testDebugUnitTest assembleRelease --stacktrace
       - run: cp app/build/outputs/apk/release/app-release.apk akoya-home-preview.apk
+      - name: Show the compilation profile packed into the APK
+        run: |
+          unzip -l akoya-home-preview.apk | grep -E 'dexopt/|classes[0-9]*\.dex' || true
+          find app/build/intermediates -iname '*baseline-prof*.txt' -o -iname 'baseline.prof' | while read f; do echo "$(wc -c < "$f") bytes  $(wc -l < "$f") lines  $f"; done
       - uses: actions/upload-artifact@v4
         with:
           name: akoya-home-preview-apk

@@ -12,8 +12,8 @@ android {
         applicationId = "com.akoya.home"
         minSdk = 28
         targetSdk = 35
-        versionCode = 9
-        versionName = "1.7.0"
+        versionCode = 10
+        versionName = "1.8.0"
     }
 
     // Fixed key committed with the project so every build (Android Studio or CI)
@@ -64,6 +64,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("androidx.savedstate:savedstate-ktx:1.2.1")
     implementation("io.coil-kt:coil-compose:2.7.0")
+    // Installs the ahead-of-time compilation profile (src/main/baseline-prof.txt) on the TV
+    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     implementation("org.nanohttpd:nanohttpd:2.3.1")
     implementation("com.google.zxing:core:3.5.3")
     // Live TV playback (HLS and MPEG-TS streams)

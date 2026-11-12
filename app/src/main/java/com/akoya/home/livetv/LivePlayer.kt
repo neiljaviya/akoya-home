@@ -17,6 +17,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 
@@ -41,7 +42,7 @@ class LivePlayer(context: Context) {
     private val handler = Handler(Looper.getMainLooper())
 
     // Live TV wants a quick start more than a deep buffer.
-    val exo: ExoPlayer = ExoPlayer.Builder(appContext)
+    val exo: ExoPlayer = ExoPlayer.Builder(appContext, DefaultRenderersFactory(appContext).setEnableDecoderFallback(true))
         .setLoadControl(
             DefaultLoadControl.Builder()
                 .setBufferDurationsMs(8_000, 30_000, 1_200, 2_500)
