@@ -115,8 +115,11 @@ class ChannelIndex(raw: List<Channel>, playlists: List<Playlist>, prefs: Channel
             val head = GroupEntry(sectionKey, section, whole.size, isPlaylist = true, section = section)
             if (whole.isNotEmpty()) visible += head
             everything += head
+            val taken = HashSet<String>()
             for ((key, sub) in perGroup) {
-                val label = prefs.groupNames[key] ?: ChannelSort.label(rawName[key].orEmpty(), section)
+                // Two playlists can both have a "News": the second one says where it is from.
+                val plain = ChannelSort.label(rawName[key].orEmpty(), section)
+                val label = prefs.groupNames[key] ?: if (taken.add(plain.lowercase())) plain else "$plain · ${names[key.substringBefore('/')] ?: "other list"}"
                 val hidden = key in prefs.hiddenGroups
                 everything += GroupEntry(key, label, if (hidden) hiddenSizes[key] ?: 0 else sub.size, hidden = hidden, section = section)
                 if (!hidden && sub.isNotEmpty()) {

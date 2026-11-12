@@ -96,6 +96,12 @@ While watching:
 
 In the channel list: groups are on the left, channels on the right. **Hold OK** on a channel or on a group for its options. **CH+ / CH−** skip a screenful, and holding Up or Down scrolls without animation.
 
+### Sections
+
+The provider's groups (there can be hundreds) are filed under a few headings: **Hindi, Gujarati, South, Canada, USA, UK, Sports, 24/7, Rest of the world** and Adults. The channel list shows the headings; moving onto one opens it out into its groups and lists the whole section on the right. Channel numbers and Left/Right zapping follow the same order.
+
+A group is filed by its name ("IN | News" is Hindi, "INR | Tamil" is South, anything about sport is Sports) and, for the free lists, by the playlist it came from. Hold OK on a group → **Move to another section** if one lands in the wrong place; hold OK on a heading → **Hide this whole section**.
+
 ### Managing a big channel list
 
 **Manage channels** (bottom of the channel list) is built for playlists with thousands of channels:
@@ -125,6 +131,8 @@ The Live TV tab shows **Movies** and **Series** tiles when a playlist's provider
 **Genres** come from three places: the provider's own genre shelves, a genre field in the provider's list when it has one, and each film's detail page as you open it. For the films still untagged, **Tag more films by genre** on the Browse screen asks the provider about each one, about one a second, in the background. It can be stopped and resumed, and the library re-sorts itself when it ends.
 
 Your arrangement (pinned and hidden collections, My list, viewing history, learned genres) is stored by title and name, so it survives a change of provider.
+
+If the app ever crashes, the TV keeps the details: phone page → TV → **Open the last crash report**.
 
 To sort things out on a computer, the phone page (TV → Live TV playlists → Export) downloads the channels, movies and series as spreadsheet files: channels with their group, playlist and guide id; titles with region, genres, category, year and rating.
 

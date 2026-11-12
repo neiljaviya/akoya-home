@@ -130,7 +130,7 @@ class ChannelIndexTest {
             ch("5", "D", "http://b/5", pl = "p2").copy(group = "IN | News"),
         )
         val index = ChannelIndex(list, emptyList())
-        assertEquals(listOf("Hindi", "News", "News", "South", "Tamil", "Sports", "beIN MAX"), index.groups.map { it.label })
+        assertEquals(listOf("Hindi", "News", "News · other list", "South", "Tamil", "Sports", "beIN MAX"), index.groups.map { it.label })
         assertEquals(listOf(true, false, false, true, false, true, false), index.groups.map { it.isPlaylist })
         // Sections decide the channel order, and separator lines are not channels.
         assertEquals(listOf("1", "5", "2", "3"), index.all.map { it.id })
