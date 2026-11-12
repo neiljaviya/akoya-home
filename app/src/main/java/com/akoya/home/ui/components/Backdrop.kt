@@ -11,6 +11,8 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -56,9 +58,12 @@ fun Backdrop(config: LauncherConfig, store: ConfigStore, modifier: Modifier = Mo
                         .background(Brush.verticalGradient(0f to Color.Transparent, 1f to p.background.copy(alpha = 0.85f))),
                 )
             }
+            // The gradients are costly to shade and never change: draw them once into a texture
+            // and reuse it, instead of re-shading the whole screen on every frame of a scroll.
             else -> Box(
                 Modifier
                     .fillMaxSize()
+                    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
                     .drawBehind {
                         drawThemeGradient(p)
                         if (config.wallpaperMode != WallpaperMode.THEME) drawMist(p, 0f)
