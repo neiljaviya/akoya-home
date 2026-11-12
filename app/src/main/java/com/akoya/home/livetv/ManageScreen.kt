@@ -127,7 +127,17 @@ fun GroupOptions(session: LiveTvSession, index: ChannelIndex, key: String) {
     val close = { session.groupOptionsFor = null }
     val label = index.label(key)
     val custom = key.startsWith("c:")
-    val wholePlaylist = key.startsWith("p:")
+    val wholePlaylist = key.startsWith("p:") || key.startsWith("s:")
+    var moving by remember { mutableStateOf(false) }
+    if (moving) {
+        OptionsDialog(
+            title = "Move $label to",
+            subtitle = "Now under ${index.sectionOf(key)}",
+            onDismiss = close,
+            options = ChannelSort.SECTIONS.filter { it != index.sectionOf(key) }.map { s -> DialogOption(s) { store.setGroupSection(key, s) } },
+        )
+        return
+    }
     if (renaming) {
         FieldsDialog(
             title = "Rename $label",
@@ -148,6 +158,11 @@ fun GroupOptions(session: LiveTvSession, index: ChannelIndex, key: String) {
                 session.panel = Panel.MANAGE
             })
             if (!wholePlaylist && key != GROUP_ALL) add(DialogOption("Rename", Icons.Filled.Edit, keepOpen = true) { renaming = true })
+            if (!wholePlaylist && !custom && key != GROUP_ALL) add(DialogOption("Move to another section", Icons.Filled.SwapHoriz, keepOpen = true) { moving = true })
+            if (key.startsWith("s:")) add(DialogOption("Hide this whole section", Icons.Filled.VisibilityOff) {
+                store.setGroupsHidden(index.allGroups.filter { !it.isPlaylist && it.section == index.sectionOf(key) }.map { it.key }, true)
+                session.groupKey = GROUP_ALL
+            })
             if (custom) {
                 add(DialogOption("Move up", Icons.Filled.ArrowUpward, keepOpen = true) { store.moveCategory(key, -1) })
                 add(DialogOption("Move down", Icons.Filled.ArrowDownward, keepOpen = true) { store.moveCategory(key, +1) })
@@ -296,8 +311,7 @@ fun ManageScreen(session: LiveTvSession, index: ChannelIndex, state: LiveTvState
     }
 
     playlistMenu?.let { g ->
-        val pid = g.key.removePrefix("p:")
-        val keys = index.allGroups.filter { !it.isPlaylist && it.key.startsWith("$pid/") }.map { it.key }
+        val keys = index.allGroups.filter { !it.isPlaylist && it.section == g.section }.map { it.key }
         OptionsDialog(
             title = g.label,
             subtitle = "${keys.size} groups",

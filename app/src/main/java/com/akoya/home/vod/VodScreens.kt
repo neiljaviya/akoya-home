@@ -172,20 +172,28 @@ private fun BrowseScreen(session: VodSession) {
     val catalog = result?.getOrNull()
     val prefs by store.prefs.collectAsState()
     val resumes by store.resumes.collectAsState()
-    val continuing = remember(resumes, kind) { resumes.filter { it.series == (kind == VodKind.SERIES) } }
+    val region = prefs.regionOrNull
+    // Continue watching belongs to "All"; a region shows that region's titles and nothing else.
+    val continuing = remember(resumes, kind, region) { if (region != null) emptyList() else resumes.filter { it.series == (kind == VodKind.SERIES) } }
     // Picking the rows looks through the whole library, so it happens off the main thread.
     val rows by produceState(emptyList<VodRow>(), catalog, prefs) {
-        value = if (catalog == null) emptyList() else withContext(Dispatchers.Default) { store.homeRows(catalog, prefs, prefs.regionOrNull) }
+        value = if (catalog == null) emptyList() else withContext(Dispatchers.Default) {
+            runCatching { store.homeRows(catalog, prefs, prefs.regionOrNull) }.getOrElse { e -> com.akoya.home.AkoyaApp.note("Library home rows", e); emptyList() }
+        }
     }
-    var focused by remember(kind) { mutableStateOf<VodItem?>(null) }
-    var focusedRow by remember(kind) { mutableIntStateOf(-1) }
-    val listState = rememberLazyListState()
+    var focused by remember(kind, region) { mutableStateOf<VodItem?>(null) }
+    var focusedRow by remember(kind, region) { mutableIntStateOf(-1) }
+    // A fresh list per region: nothing remembered about the previous region's rows (scroll
+    // position, which tile had focus) can be applied to rows that no longer exist.
+    val listState = remember(kind, region) { androidx.compose.foundation.lazy.LazyListState() }
     val firstTab = remember { FocusRequester() }
 
     LaunchedEffect(Unit) { delay(120); runCatching { firstTab.requestFocus() } }
     LaunchedEffect(focusedRow) {
-        if (focusedRow < 0) return@LaunchedEffect
-        if (ScrollPace.fast) listState.scrollToItem(focusedRow) else listState.animateScrollToItem(focusedRow)
+        val count = listState.layoutInfo.totalItemsCount
+        if (focusedRow < 0 || count == 0) return@LaunchedEffect
+        val target = focusedRow.coerceAtMost(count - 1)
+        if (ScrollPace.fast) listState.scrollToItem(target) else listState.animateScrollToItem(target)
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -230,6 +238,8 @@ private fun BrowseScreen(session: VodSession) {
                 style = AkoyaType.body, color = p.muted, modifier = Modifier.padding(horizontal = 56.dp, vertical = 20.dp),
             )
             else -> CompositionLocalProvider(LocalBringIntoViewSpec provides NoScrollSpec) {
+              androidx.compose.runtime.key(kind, region) {
+                val tag = region?.name ?: "all"
                 LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 260.dp)) {
                     val offset = if (continuing.isEmpty()) 0 else 1
                     if (continuing.isNotEmpty()) item(key = "__continue") {
@@ -244,11 +254,12 @@ private fun BrowseScreen(session: VodSession) {
                             }
                         }
                     }
-                    itemsIndexed(rows, key = { _, r -> r.key }) { i, row ->
+                    itemsIndexed(rows, key = { _, r -> tag + "/" + r.key }) { i, row ->
                         Column(Modifier.onFocusChanged { if (it.hasFocus) focusedRow = i + offset }) {
                             SectionHeader(row.title)
                             TvLazyRow {
-                                items(row.items, key = { it.key }) { item ->
+                                // Position is part of the key, so a title can never clash with itself in a row.
+                                itemsIndexed(row.items, key = { n, v -> "$n:" + v.key }) { _, item ->
                                     PosterCard(item.poster, item.title, POSTER_W, onFocus = { focused = item }, onLongClick = { store.toggleMyList(item) }) { session.open(VodScreen.Detail(item)) }
                                 }
                                 if (row.all.size > row.items.size) item(key = "__all") {
@@ -269,6 +280,7 @@ private fun BrowseScreen(session: VodSession) {
                         }
                     }
                 }
+              }
             }
         }
     }

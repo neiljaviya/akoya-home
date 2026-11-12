@@ -374,7 +374,7 @@ class VodStore private constructor(private val context: Context) {
             if (all.size >= min && rows.size < 18) rows += VodRow(key, title, all.take(HOME_ROW), all)
         }
 
-        val mine = prefs.myList.mapNotNull { catalog.byTitle[it] }
+        val mine = prefs.myList.mapNotNull { catalog.byTitle[it] }.filter { region == null || it.region == region }
         add("__mylist", "My list", mine)
 
         // Recommendations: the genres and shelves of what was watched lately, within this region.
@@ -394,6 +394,7 @@ class VodStore private constructor(private val context: Context) {
             }
             val last = watched.first()
             catalog.byTitle[last.titleKey]?.let { t ->
+                if (region != null && t.region != region) return@let
                 val g = t.genres.firstOrNull() ?: return@let
                 val more = titles.filter { g in it.genres && it.tkey != t.tkey && it.region == t.region }.sortedByDescending { it.rating.toFloatOrNull() ?: 0f }
                 add("__because", "Because you watched ${t.title}", more, min = 6)
@@ -406,7 +407,8 @@ class VodStore private constructor(private val context: Context) {
         for (key in prefs.pinned) shown.firstOrNull { it.first.prefKey == key }?.let { (c, list) -> add(c.key, c.display, newest(list)) }
         shown.filter { (c, _) -> TRENDING.any { it in c.raw.lowercase() } }.take(2).forEach { (c, list) -> add(c.key, c.display, newest(list), min = 4) }
         for (shelf in catalog.genreShelves(region)) add(shelf.key, shelf.name, newest(shelf.items), min = 8)
-        return rows.distinctBy { it.key }
+        // Belt and braces: one row per key, one tile per title in a row.
+        return rows.distinctBy { it.key }.map { r -> VodRow(r.key, r.title, r.items.distinctBy { it.key }, r.all) }
     }
 
     /** The library as a spreadsheet file (CSV), or null when it can't be loaded. */
